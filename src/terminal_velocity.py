@@ -119,9 +119,8 @@ def main():
     for name in args.exclude.split(','):
         exclude.append(name.strip())
     args.exclude = exclude
-    if args.print_config:
-        print(args)
-        sys.exit()
+
+    # Set up logging before print_config so log file is created
     logger = logging.getLogger("tv3")
     logger.setLevel(logging.DEBUG)
     fh = logging.handlers.RotatingFileHandler(
@@ -137,6 +136,10 @@ def main():
     sh.setLevel(logging.CRITICAL)
     logger.addHandler(sh)
     logger.debug(args)
+
+    if args.print_config:
+        print(args)
+        sys.exit(0)
     #try:
     urwid_ui.launch(
         notes_dir=args.notes_dir,

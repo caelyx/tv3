@@ -185,34 +185,57 @@ class PlainTextNoteBook(object):
         return self.search_function(self, query)
 
     def add_new(self, filename, root=None):
+        """Create a new Note and add it to this NoteBook."""
+        # Early checks for excluded/unwanted files (return None silently)
         if filename in self.exclude:
             return None
-        if filename.startswith('.') or filename.endswith('~'):
-            return None
-        if os.path.splitext(filename)[1] not in self.extensions:
-            return None
-        if root is None:
-            root = self._path
-        logger.debug("Creating filename: {}".format(filename))
-        abspath = os.path.join(root, filename)
-        with open(abspath, 'a') as fp:
-            fp.write("")
-        title = os.path.relpath(abspath, self.path)
-        title, extension = os.path.splitext(title)
-        if title is None:
-            message = 'Could not decode filename: {}'
-            logger.error(message.format(title))
+        if filename.endswith('~'):
             return None
 
-        """Create a new Note and add it to this NoteBook."""
-        if extension is None:
-            extension = self.extension
-        if title.startswith(os.sep):
-            title = title[len(os.sep):]
+        # Check if file already exists (scanning) or we're creating it (user-initiated)
+        if root is None:
+            root = self._path
+        abspath = os.path.join(root, filename)
+        file_exists = os.path.exists(abspath)
+
+        # For existing files (directory scanning), silently ignore dotfiles
+        # For new files (user-initiated), validate and raise errors
+        if filename.startswith('.'):
+            if file_exists:
+                return None  # Silently ignore dotfiles during scanning
+            else:
+                raise InvalidNoteTitleError('Invalid note title: {}'.format(filename))
+
+        # Always raise error for filenames starting with /
+        if filename.startswith(os.sep):
+            raise InvalidNoteTitleError('Invalid note title: {}'.format(filename))
+
+        # Check extension before creating file
+        _, extension = os.path.splitext(filename)
+        if extension not in self.extensions:
+            return None
+
+        # Create the file on disk if it doesn't exist
+        logger.debug("Creating filename: {}".format(filename))
+        # Create parent directories if they don't exist
+        parent_dir = os.path.dirname(abspath)
+        if parent_dir and not os.path.exists(parent_dir):
+            os.makedirs(parent_dir, exist_ok=True)
+        with open(abspath, 'a') as fp:
+            fp.write("")
+
+        # Extract title using relpath to preserve directory structure
+        title = os.path.relpath(abspath, self.path)
+        title, extension = os.path.splitext(title)
+
+        # Validate title (raise exception for invalid titles)
+        if not title:
+            raise InvalidNoteTitleError('Invalid note title: {}'.format(filename))
         title = title.strip()
         if not os.path.split(title)[1]:
-            message = 'Invalid note title: {}'
-            raise InvalidNoteTitleError(message.format(title))
+            raise InvalidNoteTitleError('Invalid note title: {}'.format(filename))
+
+        # Check for duplicates and add to notebook
         with self._notes_lock:
             for note in self._notes:
                 if note.title == title and note.extension == extension:
