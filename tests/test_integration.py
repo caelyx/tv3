@@ -311,7 +311,10 @@ exclude = archive
         archive_dir.mkdir()
         Path(archive_dir, "old.txt").write_text("Old")
 
-        with patch("sys.argv", ["tv3", "-c", str(config_file), "-p"]), contextlib.suppress(SystemExit):
+        with (
+            patch("sys.argv", ["tv3", "-c", str(config_file), "-p"]),
+            contextlib.suppress(SystemExit),
+        ):
             terminal_velocity.main()
 
     def test_ui_respects_configured_extensions(self, temp_notes_dir):

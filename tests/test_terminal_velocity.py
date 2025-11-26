@@ -73,17 +73,20 @@ notes_dir = /tmp/custom_notes
         config_file = tmp_path / "config"
         config_file.write_text("[DEFAULT]\n")
 
-        with patch(
-            "sys.argv",
-            [
-                "tv3",
-                "--config",
-                str(config_file),
-                "--extensions",
-                ".org, .txt, .md",
-                "--print-config",
-            ],
-        ), pytest.raises(SystemExit):
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "tv3",
+                    "--config",
+                    str(config_file),
+                    "--extensions",
+                    ".org, .txt, .md",
+                    "--print-config",
+                ],
+            ),
+            pytest.raises(SystemExit),
+        ):
             terminal_velocity.main()
 
     def test_exclude_argument(self, tmp_path):
@@ -91,17 +94,20 @@ notes_dir = /tmp/custom_notes
         config_file = tmp_path / "config"
         config_file.write_text("[DEFAULT]\n")
 
-        with patch(
-            "sys.argv",
-            [
-                "tv3",
-                "--config",
-                str(config_file),
-                "--exclude",
-                "backup, archive, temp",
-                "--print-config",
-            ],
-        ), pytest.raises(SystemExit):
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "tv3",
+                    "--config",
+                    str(config_file),
+                    "--exclude",
+                    "backup, archive, temp",
+                    "--print-config",
+                ],
+            ),
+            pytest.raises(SystemExit),
+        ):
             terminal_velocity.main()
 
     def test_notes_dir_argument(self, tmp_path):
@@ -135,10 +141,20 @@ notes_dir = /tmp/custom_notes
         config_file.write_text("[DEFAULT]\n")
         log_file = tmp_path / "custom.log"
 
-        with patch(
-            "sys.argv",
-            ["tv3", "--config", str(config_file), "--log-file", str(log_file), "--print-config"],
-        ), pytest.raises(SystemExit):
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "tv3",
+                    "--config",
+                    str(config_file),
+                    "--log-file",
+                    str(log_file),
+                    "--print-config",
+                ],
+            ),
+            pytest.raises(SystemExit),
+        ):
             terminal_velocity.main()
 
 
@@ -192,10 +208,13 @@ extension = .txt
         config_file.write_text(config_content)
 
         # Command line should override the config file settings
-        with patch(
-            "sys.argv",
-            ["tv3", "-c", str(config_file), "--editor", "vim", "--extension", ".md", "-p"],
-        ), pytest.raises(SystemExit):
+        with (
+            patch(
+                "sys.argv",
+                ["tv3", "-c", str(config_file), "--editor", "vim", "--extension", ".md", "-p"],
+            ),
+            pytest.raises(SystemExit),
+        ):
             terminal_velocity.main()
 
 
@@ -208,10 +227,13 @@ class TestLogging:
         config_file.write_text("[DEFAULT]\n")
         log_file = tmp_path / "test.log"
 
-        with patch(
-            "sys.argv",
-            ["tv3", "-c", str(config_file), "--debug", "--log-file", str(log_file), "-p"],
-        ), pytest.raises(SystemExit):
+        with (
+            patch(
+                "sys.argv",
+                ["tv3", "-c", str(config_file), "--debug", "--log-file", str(log_file), "-p"],
+            ),
+            pytest.raises(SystemExit),
+        ):
             terminal_velocity.main()
 
     def test_default_logging_level(self, tmp_path):
@@ -293,9 +315,13 @@ class TestExcludeParsing:
         config_file = tmp_path / "config"
         config_file.write_text("[DEFAULT]\n")
 
-        with patch(
-            "sys.argv", ["tv3", "-c", str(config_file), "--exclude", "backup, tmp, archive", "-p"]
-        ), pytest.raises(SystemExit):
+        with (
+            patch(
+                "sys.argv",
+                ["tv3", "-c", str(config_file), "--exclude", "backup, tmp, archive", "-p"],
+            ),
+            pytest.raises(SystemExit),
+        ):
             terminal_velocity.main()
 
     def test_exclude_list_no_spaces(self, tmp_path):
@@ -392,7 +418,10 @@ extension = .md
 """
         config_file.write_text(config_content)
 
-        with patch("sys.argv", ["tv3", "-c", str(config_file), "-p"]), contextlib.suppress(SystemExit):
+        with (
+            patch("sys.argv", ["tv3", "-c", str(config_file), "-p"]),
+            contextlib.suppress(SystemExit),
+        ):
             terminal_velocity.main()
 
         captured = capsys.readouterr()
