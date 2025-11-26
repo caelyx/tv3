@@ -149,11 +149,7 @@ def main():
     args.extensions = [ext.strip() for ext in args.extensions.split(",")]
     args.exclude = [name.strip() for name in args.exclude.split(",")]
 
-    if args.print_config:
-        print(args)
-        sys.exit(0)
-
-    # Set up logging
+    # Set up logging before print_config so log file is created
     logger = logging.getLogger("tv3")
     logger.setLevel(logging.DEBUG)
 
@@ -178,6 +174,10 @@ def main():
     logger.addHandler(sh)
 
     logger.debug(f"Starting Terminal Velocity with args: {args}")
+
+    if args.print_config:
+        print(args)
+        sys.exit(0)
 
     # Launch the UI with proper error handling
     try:
