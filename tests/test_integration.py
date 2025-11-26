@@ -8,6 +8,8 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+import contextlib
+
 import terminal_velocity
 import tv_notebook
 import urwid_ui
@@ -231,10 +233,8 @@ class TestErrorRecoveryIntegration:
         notebook = tv_notebook.PlainTextNoteBook(temp_notes_dir, ".txt", [".txt"])
 
         # Try to create invalid note
-        try:
+        with contextlib.suppress(tv_notebook.InvalidNoteTitleError):
             notebook.add_new("/.txt")
-        except tv_notebook.InvalidNoteTitleError:
-            pass
 
         # Notebook should still work
         note = notebook.add_new("valid_note.txt")
@@ -251,10 +251,8 @@ class TestErrorRecoveryIntegration:
         notebook.add_new("duplicate.txt")
 
         # Try to create duplicate
-        try:
+        with contextlib.suppress(tv_notebook.NoteAlreadyExistsError):
             notebook.add_new("duplicate.txt")
-        except tv_notebook.NoteAlreadyExistsError:
-            pass
 
         # Notebook should still work
         assert len(notebook) == 1
@@ -274,13 +272,11 @@ class TestErrorRecoveryIntegration:
         time.sleep(0.3)
 
         frame.filter("")
-        frame.selected_note = list(frame.tv_notebook)[0]
+        frame.selected_note = next(iter(frame.tv_notebook))
 
         # Try to open note (editor will fail)
-        try:
+        with contextlib.suppress(Exception):
             frame.keypress((80, 24), "enter")
-        except Exception:
-            pass
 
         # UI should still work
         frame.filter("test")
@@ -315,11 +311,8 @@ exclude = archive
         archive_dir.mkdir()
         Path(archive_dir, "old.txt").write_text("Old")
 
-        with patch("sys.argv", ["tv3", "-c", str(config_file), "-p"]):
-            try:
-                terminal_velocity.main()
-            except SystemExit:
-                pass
+        with patch("sys.argv", ["tv3", "-c", str(config_file), "-p"]), contextlib.suppress(SystemExit):
+            terminal_velocity.main()
 
     def test_ui_respects_configured_extensions(self, temp_notes_dir):
         """Test that UI respects configured extensions."""

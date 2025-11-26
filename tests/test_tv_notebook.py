@@ -99,7 +99,7 @@ class TestPlainTextNoteBook:
         nonexistent_dir = tmp_path / "new_notes_dir"
         assert not nonexistent_dir.exists()
 
-        notebook = tv_notebook.PlainTextNoteBook(str(nonexistent_dir), ".txt", [".txt"])
+        tv_notebook.PlainTextNoteBook(str(nonexistent_dir), ".txt", [".txt"])
 
         assert nonexistent_dir.exists()
         assert os.path.isdir(nonexistent_dir)
@@ -234,7 +234,7 @@ class TestPlainTextNoteBook:
         """Test the __contains__ method."""
         notebook = tv_notebook.PlainTextNoteBook(populated_notes_dir, ".txt", [".txt", ".md"])
 
-        note = list(notebook)[0]
+        note = next(iter(notebook))
         assert note in notebook
 
         other_notebook = tv_notebook.PlainTextNoteBook(populated_notes_dir, ".txt", [".txt", ".md"])
@@ -430,7 +430,7 @@ class TestThreadSafety:
         def iterate_notes():
             try:
                 count = 0
-                for note in notebook:
+                for _note in notebook:
                     count += 1
                     time.sleep(0.01)
                 iteration_counts.append(count)

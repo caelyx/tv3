@@ -1,5 +1,6 @@
 """Persistent note storage and search."""
 
+import contextlib
 import logging
 import os
 import threading
@@ -194,11 +195,9 @@ class PlainTextNoteBook:
                 if name in dirs:
                     dirs.remove(name)
             for filename in files:
-                try:
+                # Skip files that cause errors during initialization
+                with contextlib.suppress(NoteAlreadyExistsError, InvalidNoteTitleError):
                     self.add_new(filename, root=root)
-                except (NoteAlreadyExistsError, InvalidNoteTitleError):
-                    # Skip files that cause errors during initialization
-                    pass
         # Activate watchdog
         self._observer = Observer()
         self._fileEventHandler = FileEventHandler(self)

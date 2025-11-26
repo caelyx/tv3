@@ -70,7 +70,7 @@ class TestAutocompleteWidget:
     def test_autocomplete_widget_creation(self):
         """Test creating an AutocompleteWidget."""
         widget = urwid_ui.AutocompleteWidget()
-        assert widget.fake_focus == True
+        assert widget.fake_focus
         assert widget.autocomplete_text is None
 
     def test_set_autocomplete_text(self):
@@ -99,7 +99,7 @@ class TestAutocompleteWidget:
         widget.set_edit_text("HEL")
         widget.autocomplete_text = "hello"
 
-        text, attrs = widget.get_text()
+        text, _attrs = widget.get_text()
         assert text == "hello"
 
     def test_autocomplete_display_no_match(self):
@@ -127,7 +127,7 @@ class TestAutocompleteWidget:
         widget.autocomplete_text = "hello"
 
         result = widget.consume()
-        assert result == True
+        assert result
         assert widget.edit_text == "hello"
         assert widget.autocomplete_text is None
 
@@ -137,7 +137,7 @@ class TestAutocompleteWidget:
         widget.set_edit_text("hello")
 
         result = widget.consume()
-        assert result == False
+        assert not result
 
     def test_consume_already_complete(self):
         """Test consuming when text is already complete."""
@@ -146,7 +146,7 @@ class TestAutocompleteWidget:
         widget.autocomplete_text = "hello"
 
         result = widget.consume()
-        assert result == False
+        assert not result
 
 
 class TestNoteFilterListBox:
@@ -155,7 +155,7 @@ class TestNoteFilterListBox:
     def test_listbox_creation(self):
         """Test creating a NoteFilterListBox."""
         listbox = urwid_ui.NoteFilterListBox()
-        assert listbox.fake_focus == False
+        assert not listbox.fake_focus
         assert len(listbox.list_walker) == 0
 
     def test_listbox_with_callback(self):
@@ -332,7 +332,7 @@ class TestMainFrame:
         frame.list_box.fake_focus = False
 
         frame.keypress((80, 24), "down")
-        assert frame.list_box.fake_focus == True
+        assert frame.list_box.fake_focus
 
     def test_keypress_tab_consumes_autocomplete(self, populated_notes_dir):
         """Test that TAB consumes autocomplete."""
@@ -386,7 +386,7 @@ class TestMainFrame:
         """Test that list box selection changes update selected note."""
         frame = urwid_ui.MainFrame(populated_notes_dir, "vim", ".txt", [".txt", ".md"])
 
-        note = list(frame.tv_notebook)[0]
+        note = next(iter(frame.tv_notebook))
         frame.on_list_box_changed(note)
         assert frame.selected_note == note
 
@@ -510,7 +510,7 @@ class TestEdgeCases:
         frame.loop = Mock()
 
         Path(temp_notes_dir, "test.txt").write_text("test")
-        note = list(frame.tv_notebook)[0]
+        note = next(iter(frame.tv_notebook))
         frame.selected_note = note
 
         frame.keypress((80, 24), "enter")
