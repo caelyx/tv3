@@ -4,7 +4,6 @@ import logging
 logger = logging.getLogger("tv3")
 
 import tv_notebook
-import pipes
 import shlex
 import subprocess
 import urwid
@@ -256,18 +255,18 @@ class MainFrame(urwid.Frame):
             self.quit()
         elif key in ['enter']:
             if self.selected_note:
-                note = pipes.quote(self.selected_note.abspath)
+                note = shlex.quote(self.selected_note.abspath)
                 system(self.editor + ' ' + note, self.loop)
             else:
                 if self.search_box.edit_text:
                     try:
                         note = self.tv_notebook.add_new(self.search_box.edit_text +  self.tv_notebook.extension)
-                        note = pipes.quote(note.abspath)
+                        note = shlex.quote(note.abspath)
                         system(self.editor + ' ' + note, self.loop)
                     except tv_notebook.NoteAlreadyExistsError:
                         note = self.search_box.edit_text
                         note += self.tv_notebook.extension
-                        note = pipes.quote(note)
+                        note = shlex.quote(note)
                         system(self.editor + ' ' + note, self.loop)
                     except tv_notebook.InvalidNoteTitleError:
                         # If the filename wouldn't be valid, don't attempt to process it

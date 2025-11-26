@@ -6,6 +6,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 import os
+import threading
 
 
 class Error(Exception):
@@ -162,6 +163,7 @@ class PlainTextNoteBook(object):
                 message = '{} could not be created: {}'
                 raise NewNoteBookError(message.format(self.path, e))
         self._notes = []
+        self._notes_lock = threading.Lock()
         for root, dirs, files in os.walk(self.path):
             for name in self.exclude:
                 if name in dirs:
@@ -211,12 +213,13 @@ class PlainTextNoteBook(object):
         if not os.path.split(title)[1]:
             message = 'Invalid note title: {}'
             raise InvalidNoteTitleError(message.format(title))
-        for note in self._notes:
-            if note.title == title and note.extension == extension:
-                message = 'Note already in NoteBook: {}'
-                raise NoteAlreadyExistsError(message.format(note.title))
-        note = PlainTextNote(title, self, extension)
-        self._notes.append(note)
+        with self._notes_lock:
+            for note in self._notes:
+                if note.title == title and note.extension == extension:
+                    message = 'Note already in NoteBook: {}'
+                    raise NoteAlreadyExistsError(message.format(note.title))
+            note = PlainTextNote(title, self, extension)
+            self._notes.append(note)
         return note
 
     def remove(self, filename, root=None):
@@ -230,32 +233,38 @@ class PlainTextNoteBook(object):
             message = 'Could not decode filename: {}'
             logger.error(message.format(title))
             return
-        for i in range(len(self._notes)):
-            n = self._notes[i]
-            if n.title == title:
-                logger.debug("Found note with index {} and title {}".format(i, title))
-                logger.debug("Current length is {}".format(len(self._notes)))
-                self._notes = self._notes[:i] + self._notes[i+1:]
-                logger.debug("New length is {}".format(len(self._notes)))
-                return
+        with self._notes_lock:
+            for i in range(len(self._notes)):
+                n = self._notes[i]
+                if n.title == title:
+                    logger.debug("Found note with index {} and title {}".format(i, title))
+                    logger.debug("Current length is {}".format(len(self._notes)))
+                    self._notes = self._notes[:i] + self._notes[i+1:]
+                    logger.debug("New length is {}".format(len(self._notes)))
+                    return
 
     def __len__(self):
-        return len(self._notes)
+        with self._notes_lock:
+            return len(self._notes)
 
     def __getitem__(self, index):
-        return self._notes[index]
+        with self._notes_lock:
+            return self._notes[index]
 
     def __delitem__(self, index):
         raise NotImplementedError
 
     def __iter__(self):
-        return self._notes.__iter__()
+        with self._notes_lock:
+            return iter(list(self._notes))
 
     def __reversed__(self):
-        return self._notes.__reversed__()
+        with self._notes_lock:
+            return reversed(list(self._notes))
 
     def __contains__(self, note):
-        return (note in self._notes)
+        with self._notes_lock:
+            return (note in self._notes)
 
 class FileEventHandler(FileSystemEventHandler):
     def __init__(self, notebook):
@@ -264,12 +273,16 @@ class FileEventHandler(FileSystemEventHandler):
         if not e.is_directory:
             logger.debug("Detected new file {}".format(e.src_path))
             try:
-                self._notebook.add_new(e.src_path)
+                directory = os.path.dirname(e.src_path)
+                filename = os.path.basename(e.src_path)
+                self._notebook.add_new(filename, root=directory)
             except NoteAlreadyExistsError:
                 return super().on_created(e)
         return super().on_created(e)
     def on_deleted(self, e):
         if not e.is_directory:
             logger.debug("Detected deleted file {}".format(e.src_path))
-            self._notebook.remove(e.src_path)
+            directory = os.path.dirname(e.src_path)
+            filename = os.path.basename(e.src_path)
+            self._notebook.remove(filename, root=directory)
         return super().on_deleted(e)
