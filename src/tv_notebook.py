@@ -241,9 +241,19 @@ class PlainTextNoteBook:
         # Security: Validate path doesn't escape notebook directory
         real_abspath = os.path.realpath(abspath)
         real_notebook_path = os.path.realpath(self.path)
-        if not real_abspath.startswith(real_notebook_path):
+        # Ensure we're checking directory boundaries, not just string prefixes
+        # e.g., /notes2 should not match /notes
+        try:
+            os.path.commonpath([real_abspath, real_notebook_path])
+            # Check if abspath is actually under notebook path
+            rel_path = os.path.relpath(real_abspath, real_notebook_path)
+            if rel_path.startswith(".."):
+                msg = f"Note path {abspath} is outside notebook directory"
+                raise InvalidNoteTitleError(msg)
+        except ValueError as e:
+            # Different drives on Windows
             msg = f"Note path {abspath} is outside notebook directory"
-            raise InvalidNoteTitleError(msg)
+            raise InvalidNoteTitleError(msg) from e
 
         # Create file if it doesn't exist
         if not os.path.exists(abspath):

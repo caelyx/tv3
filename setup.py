@@ -9,7 +9,7 @@ setuptools.setup(
     author="Aramís Concepción Durán",
     description="A text-based note-taking application",
     entry_points="[console_scripts]\ntv3=terminal_velocity:main\n",
-    install_requires=["urwid==2.1.2", "watchdog"],
+    install_requires=["urwid==2.1.2", "watchdog>=2.0.0,<5.0.0"],
     extras_require={
         "test": [
             "pytest>=7.0.0",
@@ -23,5 +23,5 @@ setuptools.setup(
     package_dir={"": "src"},
     py_modules=["tv_notebook", "terminal_velocity", "urwid_ui"],
     url="github.com/caelyx/tv3",
-    version="0.1",
+    version="0.1.0",
 )
