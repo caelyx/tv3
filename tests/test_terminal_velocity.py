@@ -2,12 +2,11 @@
 
 import os
 import sys
-import tempfile
-import pytest
-from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+import pytest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import terminal_velocity
 
@@ -21,7 +20,7 @@ class TestArgumentParsing:
         config_file = tmp_path / "test_config"
         config_file.write_text("[DEFAULT]\n")
 
-        with patch('sys.argv', ['tv3', '--config', str(config_file), '--print-config']):
+        with patch("sys.argv", ["tv3", "--config", str(config_file), "--print-config"]):
             with pytest.raises(SystemExit) as exc_info:
                 terminal_velocity.main()
             assert exc_info.value.code == 0
@@ -36,7 +35,7 @@ notes_dir = /tmp/custom_notes
 """
         config_file.write_text(config_content)
 
-        with patch('sys.argv', ['tv3', '-c', str(config_file), '-p']):
+        with patch("sys.argv", ["tv3", "-c", str(config_file), "-p"]):
             with pytest.raises(SystemExit):
                 terminal_velocity.main()
 
@@ -45,28 +44,45 @@ notes_dir = /tmp/custom_notes
         config_file = tmp_path / "config"
         config_file.write_text("[DEFAULT]\n")
 
-        with patch('sys.argv', ['tv3', '--config', str(config_file),
-                               '--editor', 'nano', '--print-config']):
-            with pytest.raises(SystemExit):
-                terminal_velocity.main()
+        with (
+            patch(
+                "sys.argv",
+                ["tv3", "--config", str(config_file), "--editor", "nano", "--print-config"],
+            ),
+            pytest.raises(SystemExit),
+        ):
+            terminal_velocity.main()
 
     def test_extension_argument(self, tmp_path):
         """Test specifying a custom extension."""
         config_file = tmp_path / "config"
         config_file.write_text("[DEFAULT]\n")
 
-        with patch('sys.argv', ['tv3', '--config', str(config_file),
-                               '--extension', 'md', '--print-config']):
-            with pytest.raises(SystemExit):
-                terminal_velocity.main()
+        with (
+            patch(
+                "sys.argv",
+                ["tv3", "--config", str(config_file), "--extension", "md", "--print-config"],
+            ),
+            pytest.raises(SystemExit),
+        ):
+            terminal_velocity.main()
 
     def test_extensions_argument(self, tmp_path):
         """Test specifying multiple extensions."""
         config_file = tmp_path / "config"
         config_file.write_text("[DEFAULT]\n")
 
-        with patch('sys.argv', ['tv3', '--config', str(config_file),
-                               '--extensions', '.org, .txt, .md', '--print-config']):
+        with patch(
+            "sys.argv",
+            [
+                "tv3",
+                "--config",
+                str(config_file),
+                "--extensions",
+                ".org, .txt, .md",
+                "--print-config",
+            ],
+        ):
             with pytest.raises(SystemExit):
                 terminal_velocity.main()
 
@@ -75,8 +91,17 @@ notes_dir = /tmp/custom_notes
         config_file = tmp_path / "config"
         config_file.write_text("[DEFAULT]\n")
 
-        with patch('sys.argv', ['tv3', '--config', str(config_file),
-                               '--exclude', 'backup, archive, temp', '--print-config']):
+        with patch(
+            "sys.argv",
+            [
+                "tv3",
+                "--config",
+                str(config_file),
+                "--exclude",
+                "backup, archive, temp",
+                "--print-config",
+            ],
+        ):
             with pytest.raises(SystemExit):
                 terminal_velocity.main()
 
@@ -86,20 +111,24 @@ notes_dir = /tmp/custom_notes
         config_file.write_text("[DEFAULT]\n")
         notes_dir = tmp_path / "custom_notes"
 
-        with patch('sys.argv', ['tv3', '--config', str(config_file),
-                               str(notes_dir), '--print-config']):
-            with pytest.raises(SystemExit):
-                terminal_velocity.main()
+        with (
+            patch(
+                "sys.argv", ["tv3", "--config", str(config_file), str(notes_dir), "--print-config"]
+            ),
+            pytest.raises(SystemExit),
+        ):
+            terminal_velocity.main()
 
     def test_debug_flag(self, tmp_path):
         """Test enabling debug mode."""
         config_file = tmp_path / "config"
         config_file.write_text("[DEFAULT]\n")
 
-        with patch('sys.argv', ['tv3', '--config', str(config_file),
-                               '--debug', '--print-config']):
-            with pytest.raises(SystemExit):
-                terminal_velocity.main()
+        with (
+            patch("sys.argv", ["tv3", "--config", str(config_file), "--debug", "--print-config"]),
+            pytest.raises(SystemExit),
+        ):
+            terminal_velocity.main()
 
     def test_log_file_argument(self, tmp_path):
         """Test specifying a custom log file."""
@@ -107,8 +136,10 @@ notes_dir = /tmp/custom_notes
         config_file.write_text("[DEFAULT]\n")
         log_file = tmp_path / "custom.log"
 
-        with patch('sys.argv', ['tv3', '--config', str(config_file),
-                               '--log-file', str(log_file), '--print-config']):
+        with patch(
+            "sys.argv",
+            ["tv3", "--config", str(config_file), "--log-file", str(log_file), "--print-config"],
+        ):
             with pytest.raises(SystemExit):
                 terminal_velocity.main()
 
@@ -130,7 +161,7 @@ log_file = ~/tv.log
 """
         config_file.write_text(config_content)
 
-        with patch('sys.argv', ['tv3', '-c', str(config_file), '-p']):
+        with patch("sys.argv", ["tv3", "-c", str(config_file), "-p"]):
             with pytest.raises(SystemExit):
                 terminal_velocity.main()
 
@@ -143,7 +174,7 @@ log_file = ~/.tvlog
 """
         config_file.write_text(config_content)
 
-        with patch('sys.argv', ['tv3', '-c', str(config_file), '-p']):
+        with patch("sys.argv", ["tv3", "-c", str(config_file), "-p"]):
             with pytest.raises(SystemExit):
                 terminal_velocity.main()
 
@@ -152,7 +183,7 @@ log_file = ~/.tvlog
         nonexistent = tmp_path / "does_not_exist"
 
         # Should use defaults without crashing
-        with patch('sys.argv', ['tv3', '-c', str(nonexistent), '-p']):
+        with patch("sys.argv", ["tv3", "-c", str(nonexistent), "-p"]):
             with pytest.raises(SystemExit):
                 terminal_velocity.main()
 
@@ -166,8 +197,10 @@ extension = .txt
         config_file.write_text(config_content)
 
         # Command line should override the config file settings
-        with patch('sys.argv', ['tv3', '-c', str(config_file),
-                               '--editor', 'vim', '--extension', '.md', '-p']):
+        with patch(
+            "sys.argv",
+            ["tv3", "-c", str(config_file), "--editor", "vim", "--extension", ".md", "-p"],
+        ):
             with pytest.raises(SystemExit):
                 terminal_velocity.main()
 
@@ -181,8 +214,10 @@ class TestLogging:
         config_file.write_text("[DEFAULT]\n")
         log_file = tmp_path / "test.log"
 
-        with patch('sys.argv', ['tv3', '-c', str(config_file),
-                               '--debug', '--log-file', str(log_file), '-p']):
+        with patch(
+            "sys.argv",
+            ["tv3", "-c", str(config_file), "--debug", "--log-file", str(log_file), "-p"],
+        ):
             with pytest.raises(SystemExit):
                 terminal_velocity.main()
 
@@ -192,10 +227,11 @@ class TestLogging:
         config_file.write_text("[DEFAULT]\n")
         log_file = tmp_path / "test.log"
 
-        with patch('sys.argv', ['tv3', '-c', str(config_file),
-                               '--log-file', str(log_file), '-p']):
-            with pytest.raises(SystemExit):
-                terminal_velocity.main()
+        with (
+            patch("sys.argv", ["tv3", "-c", str(config_file), "--log-file", str(log_file), "-p"]),
+            pytest.raises(SystemExit),
+        ):
+            terminal_velocity.main()
 
     def test_log_file_creation(self, tmp_path):
         """Test that log file is created."""
@@ -205,10 +241,11 @@ class TestLogging:
 
         assert not log_file.exists()
 
-        with patch('sys.argv', ['tv3', '-c', str(config_file),
-                               '--log-file', str(log_file), '-p']):
-            with pytest.raises(SystemExit):
-                terminal_velocity.main()
+        with (
+            patch("sys.argv", ["tv3", "-c", str(config_file), "--log-file", str(log_file), "-p"]),
+            pytest.raises(SystemExit),
+        ):
+            terminal_velocity.main()
 
         assert log_file.exists()
 
@@ -222,30 +259,37 @@ class TestExtensionParsing:
         config_file.write_text("[DEFAULT]\n")
 
         # Extensions with commas and spaces
-        with patch('sys.argv', ['tv3', '-c', str(config_file),
-                               '--extensions', '.txt, .md, .rst', '-p']):
-            with pytest.raises(SystemExit):
-                terminal_velocity.main()
+        with (
+            patch(
+                "sys.argv", ["tv3", "-c", str(config_file), "--extensions", ".txt, .md, .rst", "-p"]
+            ),
+            pytest.raises(SystemExit),
+        ):
+            terminal_velocity.main()
 
     def test_extension_list_no_spaces(self, tmp_path):
         """Test parsing extension list without spaces."""
         config_file = tmp_path / "config"
         config_file.write_text("[DEFAULT]\n")
 
-        with patch('sys.argv', ['tv3', '-c', str(config_file),
-                               '--extensions', '.txt,.md,.rst', '-p']):
-            with pytest.raises(SystemExit):
-                terminal_velocity.main()
+        with (
+            patch(
+                "sys.argv", ["tv3", "-c", str(config_file), "--extensions", ".txt,.md,.rst", "-p"]
+            ),
+            pytest.raises(SystemExit),
+        ):
+            terminal_velocity.main()
 
     def test_single_extension(self, tmp_path):
         """Test parsing a single extension."""
         config_file = tmp_path / "config"
         config_file.write_text("[DEFAULT]\n")
 
-        with patch('sys.argv', ['tv3', '-c', str(config_file),
-                               '--extension', 'txt', '-p']):
-            with pytest.raises(SystemExit):
-                terminal_velocity.main()
+        with (
+            patch("sys.argv", ["tv3", "-c", str(config_file), "--extension", "txt", "-p"]),
+            pytest.raises(SystemExit),
+        ):
+            terminal_velocity.main()
 
 
 class TestExcludeParsing:
@@ -256,8 +300,9 @@ class TestExcludeParsing:
         config_file = tmp_path / "config"
         config_file.write_text("[DEFAULT]\n")
 
-        with patch('sys.argv', ['tv3', '-c', str(config_file),
-                               '--exclude', 'backup, tmp, archive', '-p']):
+        with patch(
+            "sys.argv", ["tv3", "-c", str(config_file), "--exclude", "backup, tmp, archive", "-p"]
+        ):
             with pytest.raises(SystemExit):
                 terminal_velocity.main()
 
@@ -266,17 +311,20 @@ class TestExcludeParsing:
         config_file = tmp_path / "config"
         config_file.write_text("[DEFAULT]\n")
 
-        with patch('sys.argv', ['tv3', '-c', str(config_file),
-                               '--exclude', 'backup,tmp,archive', '-p']):
-            with pytest.raises(SystemExit):
-                terminal_velocity.main()
+        with (
+            patch(
+                "sys.argv", ["tv3", "-c", str(config_file), "--exclude", "backup,tmp,archive", "-p"]
+            ),
+            pytest.raises(SystemExit),
+        ):
+            terminal_velocity.main()
 
     def test_default_exclude_list(self, tmp_path):
         """Test that default exclude list is used."""
         config_file = tmp_path / "config"
         config_file.write_text("[DEFAULT]\n")
 
-        with patch('sys.argv', ['tv3', '-c', str(config_file), '-p']):
+        with patch("sys.argv", ["tv3", "-c", str(config_file), "-p"]):
             with pytest.raises(SystemExit):
                 terminal_velocity.main()
 
@@ -288,9 +336,9 @@ class TestEditorEnvironment:
         """Test that EDITOR environment variable is used."""
         config_file = tmp_path / "config"
         config_file.write_text("[DEFAULT]\n")
-        monkeypatch.setenv('EDITOR', 'emacs')
+        monkeypatch.setenv("EDITOR", "emacs")
 
-        with patch('sys.argv', ['tv3', '-c', str(config_file), '-p']):
+        with patch("sys.argv", ["tv3", "-c", str(config_file), "-p"]):
             with pytest.raises(SystemExit):
                 terminal_velocity.main()
 
@@ -298,9 +346,9 @@ class TestEditorEnvironment:
         """Test that default editor is used when EDITOR is not set."""
         config_file = tmp_path / "config"
         config_file.write_text("[DEFAULT]\n")
-        monkeypatch.delenv('EDITOR', raising=False)
+        monkeypatch.delenv("EDITOR", raising=False)
 
-        with patch('sys.argv', ['tv3', '-c', str(config_file), '-p']):
+        with patch("sys.argv", ["tv3", "-c", str(config_file), "-p"]):
             with pytest.raises(SystemExit):
                 terminal_velocity.main()
 
@@ -311,9 +359,9 @@ class TestEditorEnvironment:
 editor = nano
 """
         config_file.write_text(config_content)
-        monkeypatch.setenv('EDITOR', 'vim')
+        monkeypatch.setenv("EDITOR", "vim")
 
-        with patch('sys.argv', ['tv3', '-c', str(config_file), '-p']):
+        with patch("sys.argv", ["tv3", "-c", str(config_file), "-p"]):
             with pytest.raises(SystemExit):
                 terminal_velocity.main()
 
@@ -324,12 +372,13 @@ editor = nano
 editor = nano
 """
         config_file.write_text(config_content)
-        monkeypatch.setenv('EDITOR', 'emacs')
+        monkeypatch.setenv("EDITOR", "emacs")
 
-        with patch('sys.argv', ['tv3', '-c', str(config_file),
-                               '--editor', 'vim', '-p']):
-            with pytest.raises(SystemExit):
-                terminal_velocity.main()
+        with (
+            patch("sys.argv", ["tv3", "-c", str(config_file), "--editor", "vim", "-p"]),
+            pytest.raises(SystemExit),
+        ):
+            terminal_velocity.main()
 
 
 class TestPrintConfig:
@@ -340,7 +389,7 @@ class TestPrintConfig:
         config_file = tmp_path / "config"
         config_file.write_text("[DEFAULT]\n")
 
-        with patch('sys.argv', ['tv3', '-c', str(config_file), '-p']):
+        with patch("sys.argv", ["tv3", "-c", str(config_file), "-p"]):
             with pytest.raises(SystemExit) as exc_info:
                 terminal_velocity.main()
             # Should exit cleanly
@@ -355,7 +404,7 @@ extension = .md
 """
         config_file.write_text(config_content)
 
-        with patch('sys.argv', ['tv3', '-c', str(config_file), '-p']):
+        with patch("sys.argv", ["tv3", "-c", str(config_file), "-p"]):
             try:
                 terminal_velocity.main()
             except SystemExit:
@@ -374,12 +423,12 @@ class TestPathExpansion:
         # Create config in home directory
         home = tmp_path / "home"
         home.mkdir()
-        monkeypatch.setenv('HOME', str(home))
+        monkeypatch.setenv("HOME", str(home))
 
         config_file = home / "test_tvrc"
         config_file.write_text("[DEFAULT]\n")
 
-        with patch('sys.argv', ['tv3', '-c', '~/test_tvrc', '-p']):
+        with patch("sys.argv", ["tv3", "-c", "~/test_tvrc", "-p"]):
             with pytest.raises(SystemExit):
                 terminal_velocity.main()
 
@@ -387,15 +436,16 @@ class TestPathExpansion:
         """Test that ~ is expanded in notes directory path."""
         home = tmp_path / "home"
         home.mkdir()
-        monkeypatch.setenv('HOME', str(home))
+        monkeypatch.setenv("HOME", str(home))
 
         config_file = tmp_path / "config"
         config_file.write_text("[DEFAULT]\n")
 
-        with patch('sys.argv', ['tv3', '-c', str(config_file),
-                               '~/Notes', '-p']):
-            with pytest.raises(SystemExit):
-                terminal_velocity.main()
+        with (
+            patch("sys.argv", ["tv3", "-c", str(config_file), "~/Notes", "-p"]),
+            pytest.raises(SystemExit),
+        ):
+            terminal_velocity.main()
 
     def test_absolute_path_notes_dir(self, tmp_path):
         """Test using an absolute path for notes directory."""
@@ -403,10 +453,11 @@ class TestPathExpansion:
         config_file.write_text("[DEFAULT]\n")
         notes_dir = tmp_path / "notes"
 
-        with patch('sys.argv', ['tv3', '-c', str(config_file),
-                               str(notes_dir), '-p']):
-            with pytest.raises(SystemExit):
-                terminal_velocity.main()
+        with (
+            patch("sys.argv", ["tv3", "-c", str(config_file), str(notes_dir), "-p"]),
+            pytest.raises(SystemExit),
+        ):
+            terminal_velocity.main()
 
 
 class TestHelpAndVersion:
@@ -414,7 +465,7 @@ class TestHelpAndVersion:
 
     def test_help_flag(self):
         """Test that --help displays help."""
-        with patch('sys.argv', ['tv3', '--help']):
+        with patch("sys.argv", ["tv3", "--help"]):
             with pytest.raises(SystemExit) as exc_info:
                 terminal_velocity.main()
             # Help exits with code 0
@@ -422,7 +473,7 @@ class TestHelpAndVersion:
 
     def test_help_short_flag(self):
         """Test that -h displays help."""
-        with patch('sys.argv', ['tv3', '-h']):
+        with patch("sys.argv", ["tv3", "-h"]):
             with pytest.raises(SystemExit) as exc_info:
                 terminal_velocity.main()
             assert exc_info.value.code == 0

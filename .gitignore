@@ -1,6 +1,39 @@
 *.egg-info/
 *.pyc
+__pycache__/
 /env/
 /py3venv/
 build/
 tmp/
+dist/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Type checking
+.mypy_cache/
+.pytype/
+.pyre/
+
+# Linting
+.ruff_cache/
+
+# Logs
+*.log
+.tvlog
+
+# User config
+.tvrc
+
+# IDEs
+.vscode/
+.idea/
+*.sw[op]
+*~
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,13 +1,14 @@
 """Tests for tv_notebook.py - note storage and search functionality."""
 
 import os
-import time
+import sys
 import threading
-import pytest
+import time
 from pathlib import Path
 
-import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+import pytest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import tv_notebook
 
@@ -17,9 +18,7 @@ class TestPlainTextNote:
 
     def test_note_creation(self, temp_notes_dir):
         """Test creating a new note."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            temp_notes_dir, '.txt', ['.txt']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(temp_notes_dir, ".txt", [".txt"])
         note = tv_notebook.PlainTextNote("test_note", notebook, ".txt")
 
         assert note.title == "test_note"
@@ -28,9 +27,7 @@ class TestPlainTextNote:
 
     def test_note_creates_nested_directory(self, temp_notes_dir):
         """Test that notes create nested directories if needed."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            temp_notes_dir, '.txt', ['.txt']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(temp_notes_dir, ".txt", [".txt"])
         note = tv_notebook.PlainTextNote("subdir/note", notebook, ".txt")
 
         assert os.path.exists(os.path.join(temp_notes_dir, "subdir"))
@@ -38,14 +35,12 @@ class TestPlainTextNote:
 
     def test_note_contents(self, temp_notes_dir):
         """Test reading note contents."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            temp_notes_dir, '.txt', ['.txt']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(temp_notes_dir, ".txt", [".txt"])
 
         # Create a note with content
         note_path = os.path.join(temp_notes_dir, "content_test.txt")
         content = "This is test content\nWith multiple lines"
-        with open(note_path, 'w') as f:
+        with open(note_path, "w") as f:
             f.write(content)
 
         note = tv_notebook.PlainTextNote("content_test", notebook, ".txt")
@@ -53,13 +48,11 @@ class TestPlainTextNote:
 
     def test_note_contents_utf8(self, temp_notes_dir):
         """Test reading note with UTF-8 characters."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            temp_notes_dir, '.txt', ['.txt']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(temp_notes_dir, ".txt", [".txt"])
 
         note_path = os.path.join(temp_notes_dir, "unicode_test.txt")
         content = "Unicode test: 日本語 中文 🎉"
-        with open(note_path, 'w', encoding='utf-8') as f:
+        with open(note_path, "w", encoding="utf-8") as f:
             f.write(content)
 
         note = tv_notebook.PlainTextNote("unicode_test", notebook, ".txt")
@@ -67,12 +60,10 @@ class TestPlainTextNote:
 
     def test_note_mtime(self, temp_notes_dir):
         """Test getting note modification time."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            temp_notes_dir, '.txt', ['.txt']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(temp_notes_dir, ".txt", [".txt"])
 
         note_path = os.path.join(temp_notes_dir, "mtime_test.txt")
-        with open(note_path, 'w') as f:
+        with open(note_path, "w") as f:
             f.write("test")
 
         note = tv_notebook.PlainTextNote("mtime_test", notebook, ".txt")
@@ -81,9 +72,7 @@ class TestPlainTextNote:
 
     def test_note_equality(self, temp_notes_dir):
         """Test note equality comparison."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            temp_notes_dir, '.txt', ['.txt']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(temp_notes_dir, ".txt", [".txt"])
 
         note1 = tv_notebook.PlainTextNote("same_note", notebook, ".txt")
         note2 = tv_notebook.PlainTextNote("same_note", notebook, ".txt")
@@ -98,32 +87,26 @@ class TestPlainTextNoteBook:
 
     def test_notebook_creation(self, temp_notes_dir):
         """Test creating a new notebook."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            temp_notes_dir, '.txt', ['.txt', '.md']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(temp_notes_dir, ".txt", [".txt", ".md"])
 
         assert notebook.path == temp_notes_dir
-        assert notebook.extension == '.txt'
-        assert '.txt' in notebook.extensions
-        assert '.md' in notebook.extensions
+        assert notebook.extension == ".txt"
+        assert ".txt" in notebook.extensions
+        assert ".md" in notebook.extensions
 
     def test_notebook_creates_directory(self, tmp_path):
         """Test that notebook creates its directory if it doesn't exist."""
         nonexistent_dir = tmp_path / "new_notes_dir"
         assert not nonexistent_dir.exists()
 
-        notebook = tv_notebook.PlainTextNoteBook(
-            str(nonexistent_dir), '.txt', ['.txt']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(str(nonexistent_dir), ".txt", [".txt"])
 
         assert nonexistent_dir.exists()
         assert os.path.isdir(nonexistent_dir)
 
     def test_notebook_loads_existing_notes(self, populated_notes_dir):
         """Test that notebook loads existing notes on init."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            populated_notes_dir, '.txt', ['.txt', '.md']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(populated_notes_dir, ".txt", [".txt", ".md"])
 
         assert len(notebook) == 4
         titles = [note.title for note in notebook]
@@ -140,9 +123,7 @@ class TestPlainTextNoteBook:
         Path(temp_notes_dir, "note3.rst").write_text("content")
         Path(temp_notes_dir, "note4.doc").write_text("content")
 
-        notebook = tv_notebook.PlainTextNoteBook(
-            temp_notes_dir, '.txt', ['.txt', '.md']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(temp_notes_dir, ".txt", [".txt", ".md"])
 
         titles = [note.title for note in notebook]
         assert "note1" in titles
@@ -164,8 +145,7 @@ class TestPlainTextNoteBook:
         Path(temp_notes_dir, "root.txt").write_text("root")
 
         notebook = tv_notebook.PlainTextNoteBook(
-            temp_notes_dir, '.txt', ['.txt'],
-            exclude=['backup', 'tmp']
+            temp_notes_dir, ".txt", [".txt"], exclude=["backup", "tmp"]
         )
 
         titles = [note.title for note in notebook]
@@ -180,9 +160,7 @@ class TestPlainTextNoteBook:
         Path(temp_notes_dir, "backup~").write_text("backup")
         Path(temp_notes_dir, "normal.txt").write_text("normal")
 
-        notebook = tv_notebook.PlainTextNoteBook(
-            temp_notes_dir, '.txt', ['.txt']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(temp_notes_dir, ".txt", [".txt"])
 
         titles = [note.title for note in notebook]
         assert "normal" in titles
@@ -191,9 +169,7 @@ class TestPlainTextNoteBook:
 
     def test_add_new_note(self, temp_notes_dir):
         """Test adding a new note to the notebook."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            temp_notes_dir, '.txt', ['.txt']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(temp_notes_dir, ".txt", [".txt"])
 
         initial_count = len(notebook)
         note = notebook.add_new("new_note.txt")
@@ -205,9 +181,7 @@ class TestPlainTextNoteBook:
 
     def test_add_new_note_with_subdirectory(self, temp_notes_dir):
         """Test adding a note in a subdirectory."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            temp_notes_dir, '.txt', ['.txt']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(temp_notes_dir, ".txt", [".txt"])
 
         note = notebook.add_new("subdir/nested_note.txt")
 
@@ -217,9 +191,7 @@ class TestPlainTextNoteBook:
 
     def test_add_duplicate_note_raises_error(self, temp_notes_dir):
         """Test that adding a duplicate note raises an error."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            temp_notes_dir, '.txt', ['.txt']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(temp_notes_dir, ".txt", [".txt"])
 
         notebook.add_new("duplicate.txt")
 
@@ -228,9 +200,7 @@ class TestPlainTextNoteBook:
 
     def test_add_invalid_note_title_raises_error(self, temp_notes_dir):
         """Test that invalid note titles raise errors."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            temp_notes_dir, '.txt', ['.txt']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(temp_notes_dir, ".txt", [".txt"])
 
         with pytest.raises(tv_notebook.InvalidNoteTitleError):
             notebook.add_new("/.txt")
@@ -240,9 +210,7 @@ class TestPlainTextNoteBook:
 
     def test_remove_note(self, populated_notes_dir):
         """Test removing a note from the notebook."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            populated_notes_dir, '.txt', ['.txt', '.md']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(populated_notes_dir, ".txt", [".txt", ".md"])
 
         initial_count = len(notebook)
         notebook.remove("first_note.txt")
@@ -253,9 +221,7 @@ class TestPlainTextNoteBook:
 
     def test_remove_nested_note(self, nested_notes_dir):
         """Test removing a note from a subdirectory."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            nested_notes_dir, '.txt', ['.txt', '.md']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(nested_notes_dir, ".txt", [".txt", ".md"])
 
         initial_count = len(notebook)
         notebook.remove("project_a.md", root=os.path.join(nested_notes_dir, "work"))
@@ -266,24 +232,18 @@ class TestPlainTextNoteBook:
 
     def test_notebook_contains(self, populated_notes_dir):
         """Test the __contains__ method."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            populated_notes_dir, '.txt', ['.txt', '.md']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(populated_notes_dir, ".txt", [".txt", ".md"])
 
         note = list(notebook)[0]
         assert note in notebook
 
-        other_notebook = tv_notebook.PlainTextNoteBook(
-            populated_notes_dir, '.txt', ['.txt', '.md']
-        )
+        other_notebook = tv_notebook.PlainTextNoteBook(populated_notes_dir, ".txt", [".txt", ".md"])
         other_note = tv_notebook.PlainTextNote("nonexistent", other_notebook, ".txt")
         assert other_note not in notebook
 
     def test_notebook_iteration(self, populated_notes_dir):
         """Test iterating over notebook."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            populated_notes_dir, '.txt', ['.txt', '.md']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(populated_notes_dir, ".txt", [".txt", ".md"])
 
         notes = list(notebook)
         assert len(notes) == 4
@@ -292,9 +252,7 @@ class TestPlainTextNoteBook:
 
     def test_notebook_reversed(self, populated_notes_dir):
         """Test reversed iteration."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            populated_notes_dir, '.txt', ['.txt', '.md']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(populated_notes_dir, ".txt", [".txt", ".md"])
 
         forward = list(notebook)
         backward = list(reversed(notebook))
@@ -303,9 +261,7 @@ class TestPlainTextNoteBook:
 
     def test_notebook_getitem(self, populated_notes_dir):
         """Test accessing notes by index."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            populated_notes_dir, '.txt', ['.txt', '.md']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(populated_notes_dir, ".txt", [".txt", ".md"])
 
         note = notebook[0]
         assert isinstance(note, tv_notebook.PlainTextNote)
@@ -320,18 +276,14 @@ class TestBruteForceSearch:
 
     def test_search_empty_query(self, populated_notes_dir):
         """Test searching with an empty query returns all notes."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            populated_notes_dir, '.txt', ['.txt', '.md']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(populated_notes_dir, ".txt", [".txt", ".md"])
 
         results = tv_notebook.brute_force_search(notebook, "")
         assert len(results) == 4
 
     def test_search_by_title(self, populated_notes_dir):
         """Test searching by note title."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            populated_notes_dir, '.txt', ['.txt', '.md']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(populated_notes_dir, ".txt", [".txt", ".md"])
 
         results = tv_notebook.brute_force_search(notebook, "first")
         assert len(results) == 1
@@ -339,9 +291,7 @@ class TestBruteForceSearch:
 
     def test_search_by_content(self, populated_notes_dir):
         """Test searching by note content."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            populated_notes_dir, '.txt', ['.txt', '.md']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(populated_notes_dir, ".txt", [".txt", ".md"])
 
         results = tv_notebook.brute_force_search(notebook, "groceries")
         assert len(results) == 1
@@ -349,9 +299,7 @@ class TestBruteForceSearch:
 
     def test_search_case_insensitive_lowercase_query(self, populated_notes_dir):
         """Test that lowercase queries are case-insensitive."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            populated_notes_dir, '.txt', ['.txt', '.md']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(populated_notes_dir, ".txt", [".txt", ".md"])
 
         results = tv_notebook.brute_force_search(notebook, "second")
         assert len(results) == 1
@@ -361,9 +309,7 @@ class TestBruteForceSearch:
 
     def test_search_multiple_words(self, populated_notes_dir):
         """Test searching with multiple words."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            populated_notes_dir, '.txt', ['.txt', '.md']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(populated_notes_dir, ".txt", [".txt", ".md"])
 
         # Both words must match
         results = tv_notebook.brute_force_search(notebook, "meeting 2025")
@@ -376,9 +322,7 @@ class TestBruteForceSearch:
 
     def test_search_no_results(self, populated_notes_dir):
         """Test searching with no matching notes."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            populated_notes_dir, '.txt', ['.txt', '.md']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(populated_notes_dir, ".txt", [".txt", ".md"])
 
         results = tv_notebook.brute_force_search(notebook, "nonexistent")
         assert len(results) == 0
@@ -389,15 +333,13 @@ class TestFileWatching:
 
     def test_file_watcher_detects_new_file(self, temp_notes_dir):
         """Test that new files are detected by the file watcher."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            temp_notes_dir, '.txt', ['.txt']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(temp_notes_dir, ".txt", [".txt"])
 
         initial_count = len(notebook)
 
         # Create a new file externally
         new_file = os.path.join(temp_notes_dir, "external_note.txt")
-        with open(new_file, 'w') as f:
+        with open(new_file, "w") as f:
             f.write("Created externally")
 
         # Give watchdog time to detect the change
@@ -409,9 +351,7 @@ class TestFileWatching:
 
     def test_file_watcher_detects_deleted_file(self, populated_notes_dir):
         """Test that deleted files are detected by the file watcher."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            populated_notes_dir, '.txt', ['.txt', '.md']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(populated_notes_dir, ".txt", [".txt", ".md"])
 
         initial_count = len(notebook)
 
@@ -428,9 +368,7 @@ class TestFileWatching:
 
     def test_file_watcher_handles_duplicate_creation(self, temp_notes_dir):
         """Test that file watcher handles creation of already-tracked files gracefully."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            temp_notes_dir, '.txt', ['.txt']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(temp_notes_dir, ".txt", [".txt"])
 
         # Add a note through the notebook
         note = notebook.add_new("test_note.txt")
@@ -451,9 +389,7 @@ class TestThreadSafety:
 
     def test_concurrent_additions(self, temp_notes_dir):
         """Test that concurrent note additions are thread-safe."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            temp_notes_dir, '.txt', ['.txt']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(temp_notes_dir, ".txt", [".txt"])
 
         errors = []
         created_notes = []
@@ -486,9 +422,7 @@ class TestThreadSafety:
 
     def test_concurrent_iteration(self, populated_notes_dir):
         """Test that iterating while modifying is safe."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            populated_notes_dir, '.txt', ['.txt', '.md']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(populated_notes_dir, ".txt", [".txt", ".md"])
 
         errors = []
         iteration_counts = []
@@ -529,9 +463,7 @@ class TestThreadSafety:
 
     def test_concurrent_search(self, populated_notes_dir):
         """Test that searching while modifying is safe."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            populated_notes_dir, '.txt', ['.txt', '.md']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(populated_notes_dir, ".txt", [".txt", ".md"])
 
         errors = []
 
@@ -571,9 +503,7 @@ class TestEdgeCases:
 
     def test_empty_notebook(self, temp_notes_dir):
         """Test operations on an empty notebook."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            temp_notes_dir, '.txt', ['.txt']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(temp_notes_dir, ".txt", [".txt"])
 
         assert len(notebook) == 0
         assert list(notebook) == []
@@ -581,9 +511,7 @@ class TestEdgeCases:
 
     def test_note_with_special_characters(self, temp_notes_dir):
         """Test notes with special characters in title."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            temp_notes_dir, '.txt', ['.txt']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(temp_notes_dir, ".txt", [".txt"])
 
         # These should work
         note = notebook.add_new("note-with-dashes.txt")
@@ -597,9 +525,7 @@ class TestEdgeCases:
 
     def test_very_long_note_title(self, temp_notes_dir):
         """Test handling of very long note titles."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            temp_notes_dir, '.txt', ['.txt']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(temp_notes_dir, ".txt", [".txt"])
 
         long_title = "a" * 200 + ".txt"
         try:
@@ -608,16 +534,18 @@ class TestEdgeCases:
             # If it succeeds, that's fine too
             if note:
                 assert len(note.title) > 0
-        except (OSError, IOError):
+        except OSError:
             # Expected on systems with filename length limits
             pass
 
     def test_extension_normalization(self, temp_notes_dir):
         """Test that extensions are normalized with dots."""
         notebook = tv_notebook.PlainTextNoteBook(
-            temp_notes_dir, 'txt', ['md', 'txt']  # Without dots
+            temp_notes_dir,
+            "txt",
+            ["md", "txt"],  # Without dots
         )
 
-        assert notebook.extension == '.txt'
-        assert '.txt' in notebook.extensions
-        assert '.md' in notebook.extensions
+        assert notebook.extension == ".txt"
+        assert ".txt" in notebook.extensions
+        assert ".md" in notebook.extensions
