@@ -3,15 +3,16 @@
 import os
 import sys
 import time
-import pytest
 from pathlib import Path
-from unittest.mock import patch, Mock
+from unittest.mock import Mock, patch
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+import contextlib
 
 import terminal_velocity
-import urwid_ui
 import tv_notebook
+import urwid_ui
 
 
 class TestEndToEndWorkflow:
@@ -20,16 +21,14 @@ class TestEndToEndWorkflow:
     def test_create_and_search_note(self, temp_notes_dir):
         """Test creating a note and then searching for it."""
         # Create a notebook
-        notebook = tv_notebook.PlainTextNoteBook(
-            temp_notes_dir, '.txt', ['.txt', '.md']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(temp_notes_dir, ".txt", [".txt", ".md"])
 
         # Add a note
         note = notebook.add_new("test_note.txt")
         note_path = note.abspath
 
         # Write content to the note
-        with open(note_path, 'w') as f:
+        with open(note_path, "w") as f:
             f.write("This is a test note with important content")
 
         # Search for it
@@ -39,9 +38,7 @@ class TestEndToEndWorkflow:
 
     def test_external_file_creation_integration(self, temp_notes_dir):
         """Test that externally created files are picked up."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            temp_notes_dir, '.txt', ['.txt']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(temp_notes_dir, ".txt", [".txt"])
 
         initial_count = len(notebook)
 
@@ -61,9 +58,7 @@ class TestEndToEndWorkflow:
 
     def test_ui_search_and_filter_integration(self, populated_notes_dir):
         """Test UI search filtering integration."""
-        frame = urwid_ui.MainFrame(
-            populated_notes_dir, 'vim', '.txt', ['.txt', '.md']
-        )
+        frame = urwid_ui.MainFrame(populated_notes_dir, "vim", ".txt", [".txt", ".md"])
 
         # Initially should show all notes
         assert len(frame.list_box.list_walker) == 4
@@ -82,19 +77,17 @@ class TestEndToEndWorkflow:
         # Should show all again
         assert len(frame.list_box.list_walker) == 4
 
-    @patch('urwid_ui.system')
+    @patch("urwid_ui.system")
     def test_create_note_through_ui(self, mock_system, temp_notes_dir):
         """Test creating a note through the UI."""
-        frame = urwid_ui.MainFrame(
-            temp_notes_dir, 'vim', '.txt', ['.txt']
-        )
+        frame = urwid_ui.MainFrame(temp_notes_dir, "vim", ".txt", [".txt"])
         frame.loop = Mock()
 
         initial_count = len(frame.tv_notebook)
 
         # Type a new note name and press enter
         frame.search_box.set_edit_text("my_new_note")
-        frame.keypress((80, 24), 'enter')
+        frame.keypress((80, 24), "enter")
 
         # Should have called editor
         assert mock_system.called
@@ -108,9 +101,7 @@ class TestEndToEndWorkflow:
 
     def test_nested_directory_notes_integration(self, nested_notes_dir):
         """Test working with notes in nested directories."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            nested_notes_dir, '.txt', ['.txt', '.md']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(nested_notes_dir, ".txt", [".txt", ".md"])
 
         # Should load all nested notes
         titles = [note.title for note in notebook]
@@ -132,9 +123,7 @@ class TestEndToEndWorkflow:
         Path(temp_notes_dir, "note2.md").write_text("# Markdown file")
         Path(temp_notes_dir, "note3.rst").write_text("RST file")
 
-        notebook = tv_notebook.PlainTextNoteBook(
-            temp_notes_dir, '.txt', ['.txt', '.md']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(temp_notes_dir, ".txt", [".txt", ".md"])
 
         # Should only load .txt and .md
         titles = [note.title for note in notebook]
@@ -154,8 +143,7 @@ class TestEndToEndWorkflow:
         Path(temp_notes_dir, "backup", "backup.txt").write_text("Backup")
 
         notebook = tv_notebook.PlainTextNoteBook(
-            temp_notes_dir, '.txt', ['.txt'],
-            exclude=['archive', 'backup']
+            temp_notes_dir, ".txt", [".txt"], exclude=["archive", "backup"]
         )
 
         titles = [note.title for note in notebook]
@@ -177,9 +165,7 @@ class TestEndToEndWorkflow:
         note3_path = Path(temp_notes_dir) / "third.txt"
         note3_path.write_text("Third note")
 
-        notebook = tv_notebook.PlainTextNoteBook(
-            temp_notes_dir, '.txt', ['.txt']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(temp_notes_dir, ".txt", [".txt"])
 
         # Search for all
         results = notebook.search("")
@@ -197,9 +183,7 @@ class TestConcurrencyIntegration:
 
     def test_ui_search_during_file_creation(self, temp_notes_dir):
         """Test searching while files are being created externally."""
-        frame = urwid_ui.MainFrame(
-            temp_notes_dir, 'vim', '.txt', ['.txt']
-        )
+        frame = urwid_ui.MainFrame(temp_notes_dir, "vim", ".txt", [".txt"])
 
         # Create initial note
         Path(temp_notes_dir, "initial.txt").write_text("Initial")
@@ -221,9 +205,7 @@ class TestConcurrencyIntegration:
 
     def test_notebook_operations_with_file_watcher(self, temp_notes_dir):
         """Test notebook operations while file watcher is active."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            temp_notes_dir, '.txt', ['.txt']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(temp_notes_dir, ".txt", [".txt"])
 
         # Add notes through API
         notebook.add_new("api_note_1.txt")
@@ -248,15 +230,11 @@ class TestErrorRecoveryIntegration:
 
     def test_invalid_note_creation_doesnt_break_notebook(self, temp_notes_dir):
         """Test that invalid note creation doesn't break the notebook."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            temp_notes_dir, '.txt', ['.txt']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(temp_notes_dir, ".txt", [".txt"])
 
         # Try to create invalid note
-        try:
+        with contextlib.suppress(tv_notebook.InvalidNoteTitleError):
             notebook.add_new("/.txt")
-        except tv_notebook.InvalidNoteTitleError:
-            pass
 
         # Notebook should still work
         note = notebook.add_new("valid_note.txt")
@@ -268,17 +246,13 @@ class TestErrorRecoveryIntegration:
 
     def test_duplicate_note_doesnt_break_notebook(self, temp_notes_dir):
         """Test that duplicate note creation doesn't break the notebook."""
-        notebook = tv_notebook.PlainTextNoteBook(
-            temp_notes_dir, '.txt', ['.txt']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(temp_notes_dir, ".txt", [".txt"])
 
         notebook.add_new("duplicate.txt")
 
         # Try to create duplicate
-        try:
+        with contextlib.suppress(tv_notebook.NoteAlreadyExistsError):
             notebook.add_new("duplicate.txt")
-        except tv_notebook.NoteAlreadyExistsError:
-            pass
 
         # Notebook should still work
         assert len(notebook) == 1
@@ -287,12 +261,10 @@ class TestErrorRecoveryIntegration:
         results = notebook.search("")
         assert len(results) == 1
 
-    @patch('urwid_ui.system', side_effect=Exception("Editor failed"))
+    @patch("urwid_ui.system", side_effect=Exception("Editor failed"))
     def test_ui_recovers_from_editor_failure(self, mock_system, temp_notes_dir):
         """Test that UI recovers from editor failures."""
-        frame = urwid_ui.MainFrame(
-            temp_notes_dir, 'vim', '.txt', ['.txt']
-        )
+        frame = urwid_ui.MainFrame(temp_notes_dir, "vim", ".txt", [".txt"])
         frame.loop = Mock()
 
         # Create a note
@@ -300,13 +272,11 @@ class TestErrorRecoveryIntegration:
         time.sleep(0.3)
 
         frame.filter("")
-        frame.selected_note = list(frame.tv_notebook)[0]
+        frame.selected_note = next(iter(frame.tv_notebook))
 
         # Try to open note (editor will fail)
-        try:
-            frame.keypress((80, 24), 'enter')
-        except Exception:
-            pass
+        with contextlib.suppress(Exception):
+            frame.keypress((80, 24), "enter")
 
         # UI should still work
         frame.filter("test")
@@ -341,11 +311,11 @@ exclude = archive
         archive_dir.mkdir()
         Path(archive_dir, "old.txt").write_text("Old")
 
-        with patch('sys.argv', ['tv3', '-c', str(config_file), '-p']):
-            try:
-                terminal_velocity.main()
-            except SystemExit:
-                pass
+        with (
+            patch("sys.argv", ["tv3", "-c", str(config_file), "-p"]),
+            contextlib.suppress(SystemExit),
+        ):
+            terminal_velocity.main()
 
     def test_ui_respects_configured_extensions(self, temp_notes_dir):
         """Test that UI respects configured extensions."""
@@ -355,9 +325,7 @@ exclude = archive
         Path(temp_notes_dir, "note.rst").write_text("RST")
 
         # Only load .txt files
-        frame = urwid_ui.MainFrame(
-            temp_notes_dir, 'vim', '.txt', ['.txt']
-        )
+        frame = urwid_ui.MainFrame(temp_notes_dir, "vim", ".txt", [".txt"])
 
         # Should only have .txt files
         titles = [note.title for note in frame.tv_notebook]
@@ -366,16 +334,14 @@ exclude = archive
 
     def test_ui_creates_notes_with_configured_extension(self, temp_notes_dir):
         """Test that UI creates notes with configured extension."""
-        frame = urwid_ui.MainFrame(
-            temp_notes_dir, 'vim', '.md', ['.txt', '.md']
-        )
+        frame = urwid_ui.MainFrame(temp_notes_dir, "vim", ".md", [".txt", ".md"])
 
         # Add a note
         note = frame.tv_notebook.add_new("new_note.md")
 
         # Should have .md extension
-        assert note.extension == '.md'
-        assert note.abspath.endswith('.md')
+        assert note.extension == ".md"
+        assert note.abspath.endswith(".md")
 
 
 class TestRegressionTests:
@@ -384,20 +350,19 @@ class TestRegressionTests:
     def test_shlex_quote_used_not_pipes(self, temp_notes_dir):
         """Regression test: ensure shlex.quote is used instead of pipes.quote."""
         # This tests bug fix #2
-        import urwid_ui as ui_module
         import inspect
+
+        import urwid_ui as ui_module
 
         # Check that pipes is not imported
         source = inspect.getsource(ui_module)
-        assert 'import pipes' not in source
-        assert 'shlex.quote' in source or 'from shlex import quote' in source
+        assert "import pipes" not in source
+        assert "shlex.quote" in source or "from shlex import quote" in source
 
     def test_file_watcher_paths_handled_correctly(self, temp_notes_dir):
         """Regression test: file watcher should handle paths correctly."""
         # This tests bug fix #3
-        notebook = tv_notebook.PlainTextNoteBook(
-            temp_notes_dir, '.txt', ['.txt']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(temp_notes_dir, ".txt", [".txt"])
 
         initial_count = len(notebook)
 
@@ -416,12 +381,10 @@ class TestRegressionTests:
     def test_threading_lock_protects_notes_list(self, temp_notes_dir):
         """Regression test: threading lock should protect _notes list."""
         # This tests bug fix #4
-        notebook = tv_notebook.PlainTextNoteBook(
-            temp_notes_dir, '.txt', ['.txt']
-        )
+        notebook = tv_notebook.PlainTextNoteBook(temp_notes_dir, ".txt", [".txt"])
 
         # Should have lock attribute
-        assert hasattr(notebook, '_notes_lock')
+        assert hasattr(notebook, "_notes_lock")
         assert notebook._notes_lock is not None
 
         # Lock should be used (we test this indirectly via concurrent operations)
@@ -449,8 +412,8 @@ class TestRegressionTests:
         """Regression test: ensure Python 3 shebang is used."""
         # This tests bug fix #1
         terminal_velocity_path = Path(__file__).parent.parent / "src" / "terminal_velocity.py"
-        with open(terminal_velocity_path, 'r') as f:
+        with open(terminal_velocity_path) as f:
             first_line = f.readline()
 
-        assert 'python3' in first_line
-        assert 'python2' not in first_line
+        assert "python3" in first_line
+        assert "python2" not in first_line

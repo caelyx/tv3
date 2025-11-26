@@ -31,11 +31,10 @@ rm -rf tv3
 
 ### Installation in a Python virtual environment
 
-The code currently depends on Urwid version 1.1.1 and isn't (yet) fully
-compatible with more recent versions.  If you have other stuff depending
-on a more recent Urwid in the same Python environment, you will get a
-dependency conflict, because Python doesn't support multiple versions of
-a package in the same environment.
+The code currently depends on Urwid version 2.1.2 (pinned for compatibility).
+If you have other applications depending on a different Urwid version in the
+same Python environment, you may encounter dependency conflicts, because
+Python doesn't support multiple versions of a package in the same environment.
 
 The solution is to install TV3 in its own virtual Python environment and
 symlink it to `~/.local/bin/` (or any other directory in your `$PATH`).

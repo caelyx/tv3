@@ -1,2 +1,2 @@
-urwid
-watchdog
+urwid==2.1.2
+watchdog>=2.0.0,<5.0.0

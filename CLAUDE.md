@@ -75,7 +75,7 @@ log_file = ~/.tvlog
 
 ### Command-line options:
 - `-c, --config`: Specify config file path (default: `~/.tvrc`)
-- `-e, --editor`: Text editor to use (default: `$EDITOR` or `pico`)
+- `-e, --editor`: Text editor to use (default: `$EDITOR` environment variable, or `pico` if not set)
 - `-x, --extension`: Extension for new notes (default: `.txt`)
 - `--extensions`: Comma-separated list of extensions to recognize
 - `--exclude`: Comma-separated list of directories/files to skip
