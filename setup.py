@@ -8,7 +8,11 @@ with open("README.md") as f_readme:
 setuptools.setup(
     author="Aramís Concepción Durán",
     description="A text-based note-taking application",
-    entry_points="[console_scripts]\ntv3=terminal_velocity:main\n",
+    entry_points={
+        "console_scripts": [
+            "tv3=terminal_velocity:main",
+        ],
+    },
     install_requires=["urwid==2.1.2", "watchdog>=2.0.0,<5.0.0"],
     extras_require={
         "test": [
