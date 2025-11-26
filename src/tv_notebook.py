@@ -228,14 +228,32 @@ class PlainTextNoteBook:
         """
         if filename in self.exclude:
             return None
-        if filename.startswith(".") or filename.endswith("~"):
+        if filename.endswith("~"):
             return None
-        if os.path.splitext(filename)[1] not in self.extensions:
-            return None
+
+        # Check if file already exists (scanning) or we're creating it (user-initiated)
         if root is None:
             root = self._path
-        logger.debug(f"Creating filename: {filename}")
         abspath = os.path.join(root, filename)
+        file_exists = os.path.exists(abspath)
+
+        # For existing files (directory scanning), silently ignore dotfiles
+        # For new files (user-initiated), validate and raise errors
+        if filename.startswith("."):
+            if file_exists:
+                return None  # Silently ignore dotfiles during scanning
+            else:
+                raise InvalidNoteTitleError(f"Invalid note title: {filename}")
+
+        # Always raise error for filenames starting with /
+        if filename.startswith(os.sep):
+            raise InvalidNoteTitleError(f"Invalid note title: {filename}")
+
+        # Check extension
+        if os.path.splitext(filename)[1] not in self.extensions:
+            return None
+
+        logger.debug(f"Creating filename: {filename}")
 
         # Security: Validate path doesn't escape notebook directory
         real_abspath = os.path.realpath(abspath)
@@ -254,8 +272,11 @@ class PlainTextNoteBook:
             msg = f"Note path {abspath} is outside notebook directory"
             raise InvalidNoteTitleError(msg) from e
 
-        # Create file if it doesn't exist
-        if not os.path.exists(abspath):
+        # Create file if it doesn't exist (with parent directories)
+        if not file_exists:
+            parent_dir = os.path.dirname(abspath)
+            if parent_dir and not os.path.exists(parent_dir):
+                os.makedirs(parent_dir, exist_ok=True)
             with open(abspath, "a") as fp:
                 fp.write("")
 

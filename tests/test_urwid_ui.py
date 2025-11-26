@@ -506,10 +506,12 @@ class TestEdgeCases:
     @patch("urwid_ui.system")
     def test_editor_with_spaces_in_path(self, mock_system, temp_notes_dir):
         """Test handling editor with spaces in path."""
+        # Create the file before initializing the frame so the notebook picks it up
+        Path(temp_notes_dir, "test.txt").write_text("test")
+
         frame = urwid_ui.MainFrame(temp_notes_dir, "/usr/local/my editor", ".txt", [".txt"])
         frame.loop = Mock()
 
-        Path(temp_notes_dir, "test.txt").write_text("test")
         note = next(iter(frame.tv_notebook))
         frame.selected_note = note
 

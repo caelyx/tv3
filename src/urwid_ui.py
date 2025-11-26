@@ -140,7 +140,8 @@ class AutocompleteWidget(urwid.Edit):
             return super().get_text()
         is_substring = self.autocomplete_text.lower().startswith(self.edit_text.lower())
         if self.edit_text and is_substring:
-            text_to_show = self.edit_text + self.autocomplete_text[len(self.edit_text) :]
+            # Show the autocomplete text with its original case
+            text_to_show = self.autocomplete_text
             attrs = [
                 ("search", len(self.edit_text)),
                 ("autocomplete", len(text_to_show) - len(self.edit_text)),
@@ -357,8 +358,9 @@ class MainFrame(urwid.Frame):
                     note = self.tv_notebook.add_new(
                         self.search_box.edit_text + self.tv_notebook.extension
                     )
-                    note_path = shlex.quote(note.abspath)
-                    system(f"{self.editor} {note_path}", self.loop)
+                    if note is not None:
+                        note_path = shlex.quote(note.abspath)
+                        system(f"{self.editor} {note_path}", self.loop)
                 except tv_notebook.NoteAlreadyExistsError:
                     # Note exists, open it anyway
                     note_path = self.search_box.edit_text + self.tv_notebook.extension
