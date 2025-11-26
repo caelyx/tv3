@@ -77,9 +77,6 @@ addopts = [
     "-v",
     "--strict-markers",
     "--tb=short",
-    "--cov=src",
-    "--cov-report=html",
-    "--cov-report=term-missing",
 ]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
