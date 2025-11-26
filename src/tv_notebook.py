@@ -1,16 +1,22 @@
 """Persistent note storage and search."""
 
+import contextlib
 import logging
-logger = logging.getLogger("tv3")
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler
-
 import os
 import threading
+
+from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
+
+logger = logging.getLogger("tv3")
+
+# Constants
+WATCHDOG_STOP_TIMEOUT = 5  # seconds
 
 
 class Error(Exception):
     """Base class for exceptions in this module."""
+
     pass
 
 
@@ -19,6 +25,7 @@ class NewNoteBookError(Error):
 
     def __init__(self, value):
         self.value = value
+        super().__init__(value)
 
     def __str__(self):
         return repr(self.value)
@@ -29,6 +36,7 @@ class NewNoteError(Error):
 
     def __init__(self, value):
         self.value = value
+        super().__init__(value)
 
     def __str__(self):
         return repr(self.value)
@@ -36,11 +44,13 @@ class NewNoteError(Error):
 
 class NoteAlreadyExistsError(NewNoteError):
     """Raised when trying to add a new note that already exists."""
+
     pass
 
 
 class InvalidNoteTitleError(NewNoteError):
     """Raised when trying to add a new note with an invalid title."""
+
     pass
 
 
@@ -49,12 +59,13 @@ class DelNoteError(Error):
 
     def __init__(self, value):
         self.value = value
+        super().__init__(value)
 
     def __str__(self):
         return repr(self.value)
 
 
-class PlainTextNote(object):
+class PlainTextNote:
     """A note, stored as a plain text file on disk."""
 
     def __init__(self, title, notebook, extension):
@@ -66,20 +77,19 @@ class PlainTextNote(object):
         self._abspath = os.path.join(self._notebook.path, self._filename)
         directory = os.path.split(self.abspath)[0]
         if not os.path.isdir(directory):
-            message = '\'{} doesn\'t exist, creating it'
-            logger.debug(message.format(directory))
+            logger.debug(f"'{directory}' doesn't exist, creating it")
             try:
                 os.makedirs(directory)
-            except os.error as e:
-                message = '{} could not be created: {}'
-                raise NewNoteError(message.format(directory, e))
+            except OSError as e:
+                msg = f"{directory} could not be created: {e}"
+                raise NewNoteError(msg) from e
 
     @property
     def title(self):
         return self._title
 
     @title.setter
-    def set_title(self, new_title):
+    def title(self, new_title):
         raise NotImplementedError
 
     @property
@@ -88,29 +98,48 @@ class PlainTextNote(object):
 
     @property
     def contents(self):
-        with open(self.abspath, 'rb') as fp:
-            contents = fp.read()
-        if contents is None:
-            message = 'Could not decode file contents: {}'
-            logger.error(message.format(self.abspath))
-            return ''
-        else:
-            return contents.decode('utf-8', errors='ignore')
+        """Read and return the contents of the note file."""
+        try:
+            with open(self.abspath, "rb") as fp:
+                contents = fp.read()
+            if contents is None:
+                logger.error(f"Could not decode file contents: {self.abspath}")
+                return ""
+            return contents.decode("utf-8", errors="ignore")
+        except OSError as e:
+            logger.error(f"Error reading note {self.abspath}: {e}")
+            return ""
 
     @property
     def mtime(self):
-        return os.path.getmtime(self.abspath)
+        """Get the modification time of the note file."""
+        try:
+            return os.path.getmtime(self.abspath)
+        except OSError as e:
+            logger.error(f"Error getting mtime for {self.abspath}: {e}")
+            return 0.0
 
     @property
     def abspath(self):
         return self._abspath
 
     def __eq__(self, other):
-        return getattr(other, 'abspath', None) == self.abspath
+        return getattr(other, "abspath", None) == self.abspath
 
 
 def brute_force_search(notebook, query):
-    """Return all notes in `notebook` that match `query`."""
+    """Return all notes in `notebook` that match `query`.
+
+    Args:
+        notebook: The PlainTextNoteBook to search in.
+        query: Space-separated search terms to match.
+
+    Returns:
+        List of PlainTextNote objects that match all search terms.
+
+    The search is case-insensitive if all search words are lowercase,
+    otherwise it's case-sensitive. All words must match (AND operation).
+    """
     search_words = query.strip().split()
     matching_notes = []
     for note in notebook:
@@ -129,39 +158,36 @@ def brute_force_search(notebook, query):
     return matching_notes
 
 
-class PlainTextNoteBook(object):
+class PlainTextNoteBook:
     """A NoteBook that stores its notes as a directory of plain text files."""
 
     def __init__(
-            self,
-            path,
-            extension,
-            extensions,
-            search_function=brute_force_search,
-            exclude=None,
+        self,
+        path,
+        extension,
+        extensions,
+        search_function=brute_force_search,
+        exclude=None,
     ):
         """Make a new PlainTextNoteBook for the given path."""
         self._path = os.path.abspath(os.path.expanduser(path))
-        if extension and not extension.startswith('.'):
-            extension = '.' + extension
+        if extension and not extension.startswith("."):
+            extension = "." + extension
         self.extension = extension
         self.search_function = search_function
-        self.exclude = exclude
-        if not self.exclude:
-            self.exclude = []
+        self.exclude = exclude or []
         self.extensions = []
-        for extension in extensions:
-            if not extension.startswith('.'):
-                extension = '.' + extension
-            self.extensions.append(extension)
+        for ext in extensions:
+            if not ext.startswith("."):
+                ext = "." + ext
+            self.extensions.append(ext)
         if not os.path.isdir(self.path):
-            message = '{} doesn\'t exist, creating it'
-            logger.debug(message.format(self.path))
+            logger.debug(f"{self.path} doesn't exist, creating it")
             try:
                 os.makedirs(self.path)
-            except os.error as e:
-                message = '{} could not be created: {}'
-                raise NewNoteBookError(message.format(self.path, e))
+            except OSError as e:
+                msg = f"{self.path} could not be created: {e}"
+                raise NewNoteBookError(msg) from e
         self._notes = []
         self._notes_lock = threading.Lock()
         for root, dirs, files in os.walk(self.path):
@@ -169,6 +195,8 @@ class PlainTextNoteBook(object):
                 if name in dirs:
                     dirs.remove(name)
             for filename in files:
+                # Skip files that cause errors during initialization
+                with contextlib.suppress(NoteAlreadyExistsError, InvalidNoteTitleError):
                     self.add_new(filename, root=root)
         # Activate watchdog
         self._observer = Observer()
@@ -185,63 +213,119 @@ class PlainTextNoteBook(object):
         return self.search_function(self, query)
 
     def add_new(self, filename, root=None):
+        """Add a new note to the notebook.
+
+        Args:
+            filename: Name of the file to add (with extension).
+            root: Optional root directory. Defaults to notebook path.
+
+        Returns:
+            PlainTextNote object or None if file should be skipped.
+
+        Raises:
+            NoteAlreadyExistsError: If note with same title already exists.
+            InvalidNoteTitleError: If note title is invalid.
+        """
         if filename in self.exclude:
             return None
-        if filename.startswith('.') or filename.endswith('~'):
+        if filename.startswith(".") or filename.endswith("~"):
             return None
         if os.path.splitext(filename)[1] not in self.extensions:
             return None
         if root is None:
             root = self._path
-        logger.debug("Creating filename: {}".format(filename))
+        logger.debug(f"Creating filename: {filename}")
         abspath = os.path.join(root, filename)
-        with open(abspath, 'a') as fp:
-            fp.write("")
+
+        # Security: Validate path doesn't escape notebook directory
+        real_abspath = os.path.realpath(abspath)
+        real_notebook_path = os.path.realpath(self.path)
+        # Ensure we're checking directory boundaries, not just string prefixes
+        # e.g., /notes2 should not match /notes
+        try:
+            os.path.commonpath([real_abspath, real_notebook_path])
+            # Check if abspath is actually under notebook path
+            rel_path = os.path.relpath(real_abspath, real_notebook_path)
+            if rel_path.startswith(".."):
+                msg = f"Note path {abspath} is outside notebook directory"
+                raise InvalidNoteTitleError(msg)
+        except ValueError as e:
+            # Different drives on Windows
+            msg = f"Note path {abspath} is outside notebook directory"
+            raise InvalidNoteTitleError(msg) from e
+
+        # Create file if it doesn't exist
+        if not os.path.exists(abspath):
+            with open(abspath, "a") as fp:
+                fp.write("")
+
         title = os.path.relpath(abspath, self.path)
         title, extension = os.path.splitext(title)
         if title is None:
-            message = 'Could not decode filename: {}'
-            logger.error(message.format(title))
+            logger.error(f"Could not decode filename: {title}")
             return None
 
-        """Create a new Note and add it to this NoteBook."""
         if extension is None:
             extension = self.extension
         if title.startswith(os.sep):
-            title = title[len(os.sep):]
+            title = title[len(os.sep) :]
         title = title.strip()
         if not os.path.split(title)[1]:
-            message = 'Invalid note title: {}'
-            raise InvalidNoteTitleError(message.format(title))
+            msg = f"Invalid note title: {title}"
+            raise InvalidNoteTitleError(msg)
+
+        # Add to notebook with thread safety
         with self._notes_lock:
             for note in self._notes:
                 if note.title == title and note.extension == extension:
-                    message = 'Note already in NoteBook: {}'
-                    raise NoteAlreadyExistsError(message.format(note.title))
+                    msg = f"Note already in NoteBook: {note.title}"
+                    raise NoteAlreadyExistsError(msg)
             note = PlainTextNote(title, self, extension)
             self._notes.append(note)
         return note
 
     def remove(self, filename, root=None):
-        logger.debug("Removing {}".format(filename))
+        """Remove a note from the notebook.
+
+        Args:
+            filename: Name of the file to remove (with extension).
+            root: Optional root directory. Defaults to notebook path.
+        """
+        logger.debug(f"Removing {filename}")
         if root is None:
             root = self._path
         abspath = os.path.join(root, filename)
         title = os.path.relpath(abspath, self.path)
         title, _ = os.path.splitext(title)
         if title is None:
-            message = 'Could not decode filename: {}'
-            logger.error(message.format(title))
+            logger.error(f"Could not decode filename: {title}")
             return
         with self._notes_lock:
             for i in range(len(self._notes)):
                 n = self._notes[i]
                 if n.title == title:
-                    logger.debug("Found note with index {} and title {}".format(i, title))
-                    logger.debug("Current length is {}".format(len(self._notes)))
-                    self._notes = self._notes[:i] + self._notes[i+1:]
-                    logger.debug("New length is {}".format(len(self._notes)))
+                    logger.debug(f"Found note with index {i} and title {title}")
+                    logger.debug(f"Current length is {len(self._notes)}")
+                    self._notes = self._notes[:i] + self._notes[i + 1 :]
+                    logger.debug(f"New length is {len(self._notes)}")
                     return
+
+    def close(self):
+        """Clean up resources, stopping the file watcher."""
+        if hasattr(self, "_observer") and self._observer:
+            logger.debug("Stopping file observer")
+            self._observer.stop()
+            self._observer.join(timeout=WATCHDOG_STOP_TIMEOUT)
+            self._observer = None
+
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - cleanup resources."""
+        self.close()
+        return False
 
     def __len__(self):
         with self._notes_lock:
@@ -264,25 +348,36 @@ class PlainTextNoteBook(object):
 
     def __contains__(self, note):
         with self._notes_lock:
-            return (note in self._notes)
+            return note in self._notes
+
 
 class FileEventHandler(FileSystemEventHandler):
+    """Handle file system events for automatic note syncing."""
+
     def __init__(self, notebook):
         self._notebook = notebook
+        super().__init__()
+
     def on_created(self, e):
+        """Handle file creation events."""
         if not e.is_directory:
-            logger.debug("Detected new file {}".format(e.src_path))
+            logger.debug(f"Detected new file {e.src_path}")
             try:
                 directory = os.path.dirname(e.src_path)
                 filename = os.path.basename(e.src_path)
                 self._notebook.add_new(filename, root=directory)
-            except NoteAlreadyExistsError:
-                return super().on_created(e)
+            except (NoteAlreadyExistsError, InvalidNoteTitleError) as ex:
+                logger.debug(f"Skipping file event: {ex}")
         return super().on_created(e)
+
     def on_deleted(self, e):
+        """Handle file deletion events."""
         if not e.is_directory:
-            logger.debug("Detected deleted file {}".format(e.src_path))
-            directory = os.path.dirname(e.src_path)
-            filename = os.path.basename(e.src_path)
-            self._notebook.remove(filename, root=directory)
+            logger.debug(f"Detected deleted file {e.src_path}")
+            try:
+                directory = os.path.dirname(e.src_path)
+                filename = os.path.basename(e.src_path)
+                self._notebook.remove(filename, root=directory)
+            except Exception as ex:
+                logger.debug(f"Error handling delete event: {ex}")
         return super().on_deleted(e)

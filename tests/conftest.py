@@ -1,9 +1,8 @@
 """Pytest configuration and shared fixtures for tv3 tests."""
 
 import os
-import tempfile
-import shutil
 import time
+
 import pytest
 
 
@@ -28,7 +27,7 @@ def populated_notes_dir(temp_notes_dir):
 
     for filename, content in notes.items():
         filepath = os.path.join(temp_notes_dir, filename)
-        with open(filepath, 'w') as f:
+        with open(filepath, "w") as f:
             f.write(content)
         # Sleep briefly to ensure different mtimes
         time.sleep(0.01)
@@ -54,7 +53,7 @@ def nested_notes_dir(temp_notes_dir):
 
     for filepath, content in notes.items():
         full_path = os.path.join(temp_notes_dir, filepath)
-        with open(full_path, 'w') as f:
+        with open(full_path, "w") as f:
             f.write(content)
         time.sleep(0.01)
 
@@ -82,14 +81,16 @@ log_file = {tmp_path}/test_tv.log
 def mock_editor(tmp_path, monkeypatch):
     """Create a mock editor script that just touches a file."""
     editor_script = tmp_path / "mock_editor.sh"
-    editor_script.write_text("""#!/bin/bash
+    editor_script.write_text(
+        """#!/bin/bash
 # Mock editor that just creates/touches the file
 touch "$1"
 echo "Mock editor called with: $1" >> {}
-""".format(tmp_path / "editor_log.txt"))
+""".format(tmp_path / "editor_log.txt")
+    )
     editor_script.chmod(0o755)
 
     # Set it as the default editor
-    monkeypatch.setenv('EDITOR', str(editor_script))
+    monkeypatch.setenv("EDITOR", str(editor_script))
 
     return str(editor_script)
