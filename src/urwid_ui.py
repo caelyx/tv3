@@ -404,6 +404,9 @@ class MainFrame(urwid.Frame):
         else:
             return self.search_box.keypress((maxcol,), key)
 
+        # If not handled above, explicitly return None
+        return None
+
     def filter(self, query):
         """Do the synchronised list box filter and search box autocomplete.
 
