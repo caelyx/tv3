@@ -3,6 +3,9 @@
 Terminal Velocity 3 is a TUI application for managing plain-text notes.
 It combines finding and creating notes in a single minimal interface and
 delegates the note-taking itself to your `$EDITOR`.
+Titles are fuzzy-matched and matches are highlighted, with a snippet of the
+matching line; notes can be renamed (`Ctrl-R`), deleted (`Ctrl-K`) and
+previewed (`Ctrl-P`) without leaving the list.
 
 ![Terminal Velocity 3 Screencast](./tv3.gif)
 

@@ -107,6 +107,9 @@ log_file = ~/.tvlog
 - `Up`/`Down`, `Page Up`/`Page Down`: Navigate note list
 - `Backspace`: Delete search text or clear autocomplete
 - Typing or `Backspace` while a navigated-to note's title replaces the search text edits that title
+- `Ctrl-R`: Rename the selected note (inline prompt in the status line; `Enter` applies, `Esc` cancels)
+- `Ctrl-K`: Delete the selected note after a `y/N` confirmation (only `y` deletes)
+- `Ctrl-P`: Toggle a preview of the selected note (right of the list at 100+ columns, below it otherwise)
 
 ## Code Notes
 
