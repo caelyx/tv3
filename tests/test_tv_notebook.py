@@ -1,11 +1,15 @@
 """Tests for tv_notebook.py - note storage, the filesystem watcher and search."""
 
+import logging
 import os
+import shutil
 import threading
+import unicodedata
 from pathlib import Path
 
 import pytest
 from watchdog.events import (
+    DirCreatedEvent,
     DirDeletedEvent,
     DirMovedEvent,
     FileCreatedEvent,
@@ -15,7 +19,15 @@ from watchdog.events import (
 )
 
 from tv3 import tv_notebook
-from tv3.tv_notebook import FileEventHandler, InvalidNoteTitleError, NoteAlreadyExistsError
+from tv3.tv_notebook import (
+    FileEventHandler,
+    InvalidNoteTitleError,
+    NewNoteError,
+    NoteAlreadyExistsError,
+)
+
+NFC_CAFE = unicodedata.normalize("NFC", "café")
+NFD_CAFE = unicodedata.normalize("NFD", "café")
 
 
 def titles(nb):
@@ -29,6 +41,33 @@ def filesystem_is_case_insensitive(directory):
         return Path(directory, "caseprobe").exists()
     finally:
         probe.unlink()
+
+
+def filesystem_is_normalization_insensitive(directory):
+    probe = Path(directory, NFD_CAFE)
+    probe.write_text("")
+    try:
+        return Path(directory, NFC_CAFE).exists()
+    finally:
+        probe.unlink()
+
+
+def is_root():
+    return hasattr(os, "geteuid") and os.geteuid() == 0
+
+
+@pytest.fixture
+def read_only():
+    """Make directories read-only for the test, restoring write access at teardown."""
+    paths = []
+
+    def make(path):
+        os.chmod(path, 0o555)
+        paths.append(path)
+
+    yield make
+    for path in paths:
+        os.chmod(path, 0o755)
 
 
 class ChangeRecorder:
@@ -792,3 +831,407 @@ class TestRealWatcher:
 
         (link / "second.txt").write_text("x")
         wait_until(lambda: titles(nb) == ["first", "second"])
+
+    def test_root_deleted_clears_notes_and_reports_it(
+        self, populated_notes_dir, notebook, wait_until, caplog
+    ):
+        nb = notebook(populated_notes_dir)
+        changed = threading.Event()
+        nb.on_change = changed.set
+        caplog.set_level(logging.ERROR, logger="tv3")
+
+        shutil.rmtree(nb.path)
+
+        wait_until(lambda: len(nb) == 0)
+        assert changed.wait(5)
+        wait_until(lambda: any("no longer watching" in r.getMessage() for r in caplog.records))
+
+    def test_close_from_on_change(self, temp_notes_dir, notebook):
+        nb = notebook(temp_notes_dir)
+        done = threading.Event()
+        errors = []
+
+        def close_from_callback():
+            try:
+                nb.close()
+            except Exception as e:
+                errors.append(e)
+            done.set()
+
+        nb.on_change = close_from_callback
+        Path(nb.path, "trigger.txt").write_text("")
+
+        assert done.wait(5)
+        assert errors == []
+
+    def test_concurrent_close(self, temp_notes_dir, notebook):
+        nb = notebook(temp_notes_dir)
+        start = threading.Barrier(4)
+        errors = []
+
+        def closer():
+            start.wait()
+            try:
+                nb.close()
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=closer) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert errors == []
+
+
+class TestRootRemoved:
+    def test_deleted_root_clears_notes_logs_error_and_notifies(
+        self, populated_notes_dir, unwatched_notebook, caplog
+    ):
+        nb = unwatched_notebook(populated_notes_dir)
+        recorder = ChangeRecorder(nb)
+        nb.on_change = recorder
+        caplog.set_level(logging.ERROR, logger="tv3")
+        shutil.rmtree(nb.path)
+
+        FileEventHandler(nb).on_deleted(DirDeletedEvent(nb.path))
+
+        assert len(nb) == 0
+        assert recorder.calls == 1
+        assert [r.levelno for r in caplog.records if "no longer watching" in r.getMessage()] == [
+            logging.ERROR
+        ]
+
+    def test_moved_root_clears_notes(self, tmp_path, unwatched_notebook, caplog):
+        notes = tmp_path / "notes"
+        notes.mkdir()
+        (notes / "a.txt").write_text("")
+        nb = unwatched_notebook(notes)
+        caplog.set_level(logging.ERROR, logger="tv3")
+        dest = str(tmp_path / "elsewhere")
+        os.rename(nb.path, dest)
+
+        FileEventHandler(nb).on_moved(DirMovedEvent(nb.path, dest))
+
+        assert len(nb) == 0
+        assert any("no longer watching" in r.getMessage() for r in caplog.records)
+
+
+class TestUnicodeNormalization:
+    def test_create_matches_indexed_note_in_other_normalization(
+        self, temp_notes_dir, unwatched_notebook
+    ):
+        Path(temp_notes_dir, NFD_CAFE + ".txt").write_text("original")
+        nb = unwatched_notebook(temp_notes_dir)
+
+        with pytest.raises(NoteAlreadyExistsError) as exc_info:
+            nb.create(NFC_CAFE)
+
+        assert exc_info.value.note.title == NFD_CAFE
+        assert len(nb) == 1
+        assert os.listdir(nb.path) == [NFD_CAFE + ".txt"]
+
+    def test_unindexed_file_is_registered_under_its_on_disk_name(
+        self, temp_notes_dir, unwatched_notebook
+    ):
+        if not filesystem_is_normalization_insensitive(temp_notes_dir):
+            pytest.skip("needs a normalization-insensitive filesystem")
+        nb = unwatched_notebook(temp_notes_dir)
+        Path(nb.path, NFD_CAFE + ".txt").write_text("original")
+
+        with pytest.raises(NoteAlreadyExistsError) as exc_info:
+            nb.create(NFC_CAFE)
+
+        assert exc_info.value.note.title == NFD_CAFE
+        assert titles(nb) == [NFD_CAFE]
+
+    def test_watcher_event_in_other_normalization_is_not_a_duplicate(
+        self, temp_notes_dir, unwatched_notebook
+    ):
+        if not filesystem_is_normalization_insensitive(temp_notes_dir):
+            pytest.skip("needs a normalization-insensitive filesystem")
+        Path(temp_notes_dir, NFD_CAFE + ".txt").write_text("")
+        nb = unwatched_notebook(temp_notes_dir)
+
+        FileEventHandler(nb).on_created(FileCreatedEvent(os.path.join(nb.path, NFC_CAFE + ".txt")))
+
+        assert titles(nb) == [NFD_CAFE]
+
+    def test_created_note_uses_on_disk_directory_name(self, temp_notes_dir, unwatched_notebook):
+        if not filesystem_is_case_insensitive(temp_notes_dir):
+            pytest.skip("needs a case-insensitive filesystem")
+        os.mkdir(os.path.join(temp_notes_dir, "work"))
+        nb = unwatched_notebook(temp_notes_dir)
+
+        note = nb.create("WORK/plan")
+
+        assert note.title == os.path.join("work", "plan")
+        assert os.listdir(nb.path) == ["work"]
+
+
+class TestCreateEdgeCases:
+    def test_create_through_symlinked_directory_uses_real_path(
+        self, temp_notes_dir, unwatched_notebook
+    ):
+        os.symlink(temp_notes_dir, os.path.join(temp_notes_dir, "self"))
+        nb = unwatched_notebook(temp_notes_dir)
+
+        note = nb.create("self/x")
+
+        assert note.title == "x"
+        assert note.abspath == os.path.join(nb.path, "x.txt")
+        assert titles(nb) == ["x"]
+        with pytest.raises(NoteAlreadyExistsError) as exc_info:
+            nb.create("x")
+        assert exc_info.value.note is note
+
+    def test_create_through_symlinked_directory_into_hidden_directory_is_rejected(
+        self, temp_notes_dir, unwatched_notebook
+    ):
+        os.mkdir(os.path.join(temp_notes_dir, ".git"))
+        os.symlink(".git", os.path.join(temp_notes_dir, "git"))
+        nb = unwatched_notebook(temp_notes_dir)
+
+        with pytest.raises(InvalidNoteTitleError):
+            nb.create("git/x")
+
+        assert os.listdir(os.path.join(temp_notes_dir, ".git")) == []
+
+    def test_create_over_symlinked_file_is_rejected(self, temp_notes_dir, unwatched_notebook):
+        Path(temp_notes_dir, "n.txt").write_text("target")
+        os.symlink("n.txt", os.path.join(temp_notes_dir, "alias.txt"))
+        nb = unwatched_notebook(temp_notes_dir)
+
+        with pytest.raises(InvalidNoteTitleError):
+            nb.create("alias")
+
+        assert titles(nb) == ["n"]
+
+    def test_directory_at_note_path_is_rejected(self, temp_notes_dir, unwatched_notebook):
+        os.mkdir(os.path.join(temp_notes_dir, "folder.txt"))
+        nb = unwatched_notebook(temp_notes_dir)
+
+        with pytest.raises(InvalidNoteTitleError):
+            nb.create("folder")
+
+        assert len(nb) == 0
+
+    def test_external_delete_then_create_succeeds(self, populated_notes_dir, unwatched_notebook):
+        nb = unwatched_notebook(populated_notes_dir)
+        path = os.path.join(nb.path, "first_note.txt")
+        os.remove(path)
+
+        note = nb.create("first_note")
+
+        assert note.abspath == path
+        assert os.path.isfile(path)
+        assert note in nb
+        assert len(nb) == 4
+
+    def test_late_delete_event_does_not_drop_recreated_note(
+        self, populated_notes_dir, unwatched_notebook
+    ):
+        nb = unwatched_notebook(populated_notes_dir)
+        path = os.path.join(nb.path, "first_note.txt")
+        os.remove(path)
+        nb.create("first_note")
+
+        FileEventHandler(nb).on_deleted(FileDeletedEvent(path))
+
+        assert "first_note" in titles(nb)
+
+    def test_component_longer_than_name_max_writes_nothing(
+        self, temp_notes_dir, unwatched_notebook
+    ):
+        nb = unwatched_notebook(temp_notes_dir)
+        name_max = os.pathconf(nb.path, "PC_NAME_MAX")
+
+        with pytest.raises(InvalidNoteTitleError):
+            nb.create("dir/" + "x" * (name_max + 1))
+
+        assert os.listdir(nb.path) == []
+
+    def test_path_longer_than_path_max_writes_nothing(self, temp_notes_dir, unwatched_notebook):
+        nb = unwatched_notebook(temp_notes_dir)
+        path_max = os.pathconf(nb.path, "PC_PATH_MAX")
+        title = "/".join(["d" * 100] * (path_max // 100 + 1))
+
+        with pytest.raises(InvalidNoteTitleError):
+            nb.create(title)
+
+        assert os.listdir(nb.path) == []
+
+    def test_failed_write_removes_directories_it_created(
+        self, temp_notes_dir, unwatched_notebook, monkeypatch
+    ):
+        os.mkdir(os.path.join(temp_notes_dir, "existing"))
+        nb = unwatched_notebook(temp_notes_dir)
+
+        def failing_open(path, *args, **kwargs):
+            raise OSError(28, "No space left on device", path)
+
+        monkeypatch.setattr(tv_notebook, "open", failing_open, raising=False)
+        with pytest.raises(NewNoteError):
+            nb.create("existing/new/deeper/note")
+
+        assert os.listdir(nb.path) == ["existing"]
+        assert os.listdir(os.path.join(nb.path, "existing")) == []
+        assert len(nb) == 0
+
+    def test_write_failure_in_read_only_directory(
+        self, temp_notes_dir, unwatched_notebook, read_only
+    ):
+        if is_root():
+            pytest.skip("root ignores directory permissions")
+        nb = unwatched_notebook(temp_notes_dir)
+        read_only(nb.path)
+
+        with pytest.raises(NewNoteError) as exc_info:
+            nb.create("note")
+
+        assert type(exc_info.value) is NewNoteError
+        assert len(nb) == 0
+
+    def test_extension_matching_follows_filesystem_case_rules(
+        self, temp_notes_dir, unwatched_notebook
+    ):
+        if not filesystem_is_case_insensitive(temp_notes_dir):
+            pytest.skip("needs a case-insensitive filesystem")
+        Path(temp_notes_dir, "Old.TXT").write_text("")
+        nb = unwatched_notebook(temp_notes_dir, extensions=[".txt", ".md"])
+
+        note = nb.create("Ideas.MD")
+
+        assert note.title == "Ideas"
+        assert note.extension == ".MD"
+        assert sorted(os.listdir(nb.path)) == ["Ideas.MD", "Old.TXT"]
+        assert titles(nb) == ["Ideas", "Old"]
+
+    def test_extension_matching_is_exact_on_case_sensitive_filesystem(
+        self, temp_notes_dir, unwatched_notebook
+    ):
+        if filesystem_is_case_insensitive(temp_notes_dir):
+            pytest.skip("needs a case-sensitive filesystem")
+        nb = unwatched_notebook(temp_notes_dir, extensions=[".txt", ".md"])
+
+        nb.create("Ideas.MD")
+
+        assert os.listdir(nb.path) == ["Ideas.MD.txt"]
+
+
+class TestCaseSensitivityProbe:
+    def test_read_only_directory_uses_existing_entry(self, temp_notes_dir, read_only):
+        Path(temp_notes_dir, "r.txt").write_text("")
+        expected = filesystem_is_case_insensitive(temp_notes_dir)
+        read_only(temp_notes_dir)
+
+        assert tv_notebook._probe_case_insensitive(temp_notes_dir) is expected
+
+    def test_writes_nothing_when_an_entry_exists(self, temp_notes_dir):
+        Path(temp_notes_dir, "r.txt").write_text("")
+        expected = filesystem_is_case_insensitive(temp_notes_dir)
+        before = os.stat(temp_notes_dir).st_mtime_ns
+
+        assert tv_notebook._probe_case_insensitive(temp_notes_dir) is expected
+        assert os.listdir(temp_notes_dir) == ["r.txt"]
+        assert os.stat(temp_notes_dir).st_mtime_ns == before
+
+    def test_empty_directory_uses_its_own_name(self, tmp_path):
+        notes = tmp_path / "notes"
+        notes.mkdir()
+        expected = filesystem_is_case_insensitive(tmp_path)
+        before = os.stat(notes).st_mtime_ns
+
+        assert tv_notebook._probe_case_insensitive(str(notes)) is expected
+        assert os.stat(notes).st_mtime_ns == before
+
+    def test_entry_with_case_variant_sibling_is_case_sensitive(self, temp_notes_dir):
+        Path(temp_notes_dir, "r.txt").write_text("a")
+        if Path(temp_notes_dir, "R.txt").exists():
+            pytest.skip("needs a case-sensitive filesystem")
+        Path(temp_notes_dir, "R.txt").write_text("b")
+
+        assert tv_notebook._probe_case_insensitive(temp_notes_dir) is False
+
+    def test_unprobeable_directory_defaults_to_case_insensitive(self, tmp_path, read_only):
+        if is_root():
+            pytest.skip("root ignores directory permissions")
+        unnamed = tmp_path / "1234"
+        unnamed.mkdir()
+        read_only(str(unnamed))
+
+        assert tv_notebook._probe_case_insensitive(str(unnamed)) is True
+
+
+class TestSymlinkPolicy:
+    def test_symlinked_note_file_is_not_indexed(self, temp_notes_dir, unwatched_notebook):
+        Path(temp_notes_dir, "n.txt").write_text("x")
+        os.symlink("n.txt", os.path.join(temp_notes_dir, "alias.txt"))
+        nb = unwatched_notebook(temp_notes_dir)
+
+        FileEventHandler(nb).on_created(FileCreatedEvent(os.path.join(nb.path, "alias.txt")))
+
+        assert titles(nb) == ["n"]
+
+    def test_symlinked_directories_are_not_indexed(self, temp_notes_dir, unwatched_notebook):
+        os.mkdir(os.path.join(temp_notes_dir, "real"))
+        Path(temp_notes_dir, "real", "n.txt").write_text("x")
+        os.symlink("real", os.path.join(temp_notes_dir, "alias"))
+        os.symlink(temp_notes_dir, os.path.join(temp_notes_dir, "loop"))
+        nb = unwatched_notebook(temp_notes_dir)
+        handler = FileEventHandler(nb)
+
+        handler.on_created(DirCreatedEvent(os.path.join(nb.path, "alias")))
+        handler.on_created(DirCreatedEvent(os.path.join(nb.path, "loop")))
+
+        assert titles(nb) == [os.path.join("real", "n")]
+
+    def test_event_through_symlinked_directory_maps_to_real_note(
+        self, temp_notes_dir, unwatched_notebook
+    ):
+        Path(temp_notes_dir, "n.txt").write_text("x")
+        os.symlink(temp_notes_dir, os.path.join(temp_notes_dir, "self"))
+        nb = unwatched_notebook(temp_notes_dir)
+
+        FileEventHandler(nb).on_created(
+            FileCreatedEvent(os.path.join(nb.path, "self", "self", "n.txt"))
+        )
+
+        assert titles(nb) == ["n"]
+
+
+class TestScanAndWatcherAgree:
+    TREE = (
+        "a.txt",
+        "b.md",
+        "c.rst",
+        ".hidden.txt",
+        "backup/old.txt",
+        "deep/backup/old.txt",
+        ".git/x.txt",
+        "sub/n.txt",
+        "sub/n.txt~",
+        "sub/#n.txt#",
+    )
+
+    @staticmethod
+    def write_tree(root, relpaths):
+        paths = []
+        for relpath in relpaths:
+            path = Path(root, relpath)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("")
+            paths.append(path)
+        return paths
+
+    def test_same_paths_indexed_by_scan_and_by_watcher(self, tmp_path, unwatched_notebook):
+        self.write_tree(tmp_path / "scanned", self.TREE)
+        scanned = unwatched_notebook(tmp_path / "scanned", exclude=["backup"])
+        watched = unwatched_notebook(tmp_path / "watched", exclude=["backup"])
+        handler = FileEventHandler(watched)
+
+        for path in self.write_tree(watched.path, self.TREE):
+            handler.on_created(FileCreatedEvent(str(path)))
+
+        assert titles(scanned) == titles(watched) == ["a", "b", os.path.join("sub", "n")]
