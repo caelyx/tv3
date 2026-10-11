@@ -16,7 +16,8 @@ and a port from Legacy Python to **Python 3**.
 ## Installation
 
 TV3 is installed as a [uv](https://docs.astral.sh/uv/) tool, which gives it
-its own isolated environment and puts `tv3` on your `$PATH`:
+its own isolated environment and installs the `tv3` executable into uv's tool
+bin directory (usually `~/.local/bin`):
 
 ```bash
 uv tool install git+https://github.com/caelyx/tv3
@@ -30,11 +31,25 @@ cd tv3
 uv tool install .
 ```
 
-To upgrade later:
+If your shell can't find `tv3`, that directory isn't on your `$PATH`. Run
+`uv tool update-shell` and restart your shell.
+
+To upgrade a git install:
 
 ```bash
 uv tool upgrade tv3
 ```
+
+To upgrade a clone install, from the clone:
+
+```bash
+git pull && uv tool upgrade tv3
+```
+
+## Usage
+
+Run `tv3 [notes_dir]`; the notes directory defaults to `~/Notes`. Defaults can
+be set in `~/.tvrc`; see `tv3 --help` for all options.
 
 ## Development
 

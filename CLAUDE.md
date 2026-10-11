@@ -40,6 +40,8 @@ The codebase is the `tv3` package in `src/tv3/`, organized into three main modul
 
 Packaging is pyproject-only with the `uv_build` backend; dependencies are locked in `uv.lock`.
 
+The development Python is pinned in `.python-version` (3.14). Run project commands through `uv run` so they use the project's `.venv`.
+
 ### Set up the development environment:
 ```bash
 uv sync
@@ -64,6 +66,8 @@ uv run ruff check .
 uv run ruff format --check .
 uv run mypy src
 ```
+
+Tests live in `tests/`; see `TESTING.md` for testing guidance and `./run_tests.sh help` for the convenience runner.
 
 ### Configuration
 

@@ -15,7 +15,7 @@ if [ "$1" == "coverage" ]; then
     echo ""
     echo "Coverage report generated in htmlcov/index.html"
 elif [ "$1" == "fast" ]; then
-    echo "Running fast tests only (skipping slow tests)..."
+    echo "Skipping tests marked slow (real filesystem-watcher tests)..."
     uv run pytest -m "not slow"
 elif [ "$1" == "unit" ]; then
     echo "Running unit tests only..."
@@ -32,7 +32,7 @@ elif [ "$1" == "help" ] || [ "$1" == "-h" ] || [ "$1" == "--help" ]; then
     echo "Options:"
     echo "  (none)        Run all tests"
     echo "  coverage      Run with coverage report"
-    echo "  fast          Run fast tests only"
+    echo "  fast          Skip tests marked slow (real filesystem-watcher tests)"
     echo "  unit          Run unit tests only"
     echo "  integration   Run integration tests only"
     echo "  verbose       Run with verbose output"

@@ -112,9 +112,9 @@ except Exception as e:
 **Impact:** May break in future; security vulnerabilities.
 
 **Action Items:**
-- [ ] Update `actions/checkout@v1` → `actions/checkout@v4`
-- [ ] Update `actions/setup-python@v1` → `actions/setup-python@v5`
-- [ ] Update `github/codeql-action/*@v1` → `github/codeql-action/*@v3`
+- [x] Update `actions/checkout@v1` → `actions/checkout@v4` (now `@v7`)
+- [x] ~~Update `actions/setup-python@v1` → `actions/setup-python@v5`~~ (superseded: CI uses `astral-sh/setup-uv`)
+- [x] Update `github/codeql-action/*@v1` → `github/codeql-action/*@v3` (now `@v4`)
 - [ ] Test workflows locally with `act` if possible
 - [ ] Verify workflows run successfully in GitHub
 
@@ -140,7 +140,7 @@ except Exception as e:
   - [ ] `system()` function
 - [ ] Add `from typing import` imports (List, Dict, Optional, Union)
 - [ ] Add `py.typed` marker file
-- [ ] Configure mypy in setup.cfg
+- [x] Configure mypy in `pyproject.toml` (`[tool.mypy]`)
 - [ ] Add mypy to pre-commit hooks
 - [ ] Run mypy and fix all errors
 
@@ -178,12 +178,12 @@ except Exception as e:
 **Issue:** Workflow only runs linting, not tests!
 
 **Action Items:**
-- [ ] Add pytest execution step to workflow
-- [ ] Add coverage reporting (xml and term-missing)
-- [ ] Upload coverage to Codecov or similar
+- [x] Add pytest execution step to workflow
+- [x] Add coverage reporting (xml and term-missing)
+- [x] Upload coverage to Codecov or similar
 - [ ] Add test results reporting
-- [ ] Set coverage threshold (e.g., 80%)
-- [ ] Fail build if tests fail or coverage drops
+- [x] Set coverage threshold (e.g., 80%)
+- [x] Fail build if tests fail or coverage drops
 
 **Implementation:**
 ```yaml
@@ -204,12 +204,12 @@ except Exception as e:
 **Action Items:**
 
 #### a) Fix README.md vs pyproject.toml contradiction
-- [ ] Update README.md line 34 (says urwid 1.1.1, should be 2.1.2)
+- [x] ~~Update README.md line 34 (says urwid 1.1.1, should be 2.1.2)~~ (no longer applies: README no longer mentions urwid versions)
 - [ ] Document why urwid is pinned to 2.1.2
 
 #### b) Fix CLAUDE.md incorrect default
-- [ ] Update CLAUDE.md line 40 about default editor
-- [ ] Should mention `$EDITOR` environment variable first, then `pico`
+- [x] Update CLAUDE.md line 40 about default editor
+- [x] Should mention `$EDITOR` environment variable first, then `pico`
 
 #### c) General documentation cleanup
 - [ ] Ensure all code examples are correct
@@ -221,16 +221,16 @@ except Exception as e:
 ### 11. Add Proper .gitignore Entries
 
 **Action Items:**
-- [ ] Add `__pycache__/` (Python cache directories)
-- [ ] Add `.pytest_cache/` (Pytest cache)
-- [ ] Add `.coverage` (Coverage data file)
-- [ ] Add `htmlcov/` (Coverage HTML reports)
-- [ ] Add `.mypy_cache/` (Mypy cache)
-- [ ] Add `*.log` (Log files)
-- [ ] Add `.tvlog` (App log file)
-- [ ] Add `.tvrc` (User config file)
-- [ ] Add `.ruff_cache/` (Ruff cache)
-- [ ] Add `dist/` (Distribution files)
+- [x] Add `__pycache__/` (Python cache directories)
+- [x] Add `.pytest_cache/` (Pytest cache)
+- [x] Add `.coverage` (Coverage data file)
+- [x] Add `htmlcov/` (Coverage HTML reports)
+- [x] Add `.mypy_cache/` (Mypy cache)
+- [x] Add `*.log` (Log files)
+- [x] Add `.tvlog` (App log file)
+- [x] Add `.tvrc` (User config file)
+- [x] Add `.ruff_cache/` (Ruff cache)
+- [x] Add `dist/` (Distribution files)
 - [ ] Review and test .gitignore
 
 ---
@@ -441,12 +441,12 @@ assert wait_for_condition(lambda: len(notebook) == expected_count)
 ### 18. Add `__version__` to `__init__.py`
 
 **Action Items:**
-- [ ] Add version string to `src/tv3/__init__.py`
+- [x] Add version string to `src/tv3/__init__.py`
 - [ ] Add author information
-- [ ] Add package docstring
+- [x] Add package docstring
 - [ ] Define `__all__` for clean imports
-- [ ] Consider using single-source versioning
-- [ ] Keep the version in pyproject.toml and `__init__.py` in sync
+- [x] Consider using single-source versioning (`importlib.metadata`)
+- [x] Keep the version in pyproject.toml and `__init__.py` in sync
 - [ ] Add version display to CLI (`--version` flag)
 
 **Implementation:**
@@ -458,9 +458,11 @@ It combines finding and creating notes in a single minimal interface and
 delegates the note-taking itself to your $EDITOR.
 """
 
-__version__ = "0.1.0"
+from importlib.metadata import version
+
+__version__ = version("tv3")
 __author__ = "Aramís Concepción Durán"
-__license__ = "GNU General Public License, Version 3"
+__license__ = "GPL-3.0-only"
 __all__ = ["terminal_velocity", "tv_notebook", "urwid_ui"]
 
 # Could also import main for convenience
@@ -474,9 +476,9 @@ from .terminal_velocity import main
 ### Replace flake8 with ruff
 
 **Action Items:**
-- [ ] Remove flake8 from CI workflow
-- [ ] Add ruff to CI workflow
-- [ ] Configure ruff in `pyproject.toml` or `ruff.toml`
+- [x] Remove flake8 from CI workflow
+- [x] Add ruff to CI workflow
+- [x] Configure ruff in `pyproject.toml` or `ruff.toml`
 - [ ] Run `ruff check --fix .` to auto-fix issues
 - [ ] Run `ruff format .` to format code
 - [ ] Review and commit changes
