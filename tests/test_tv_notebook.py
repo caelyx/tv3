@@ -98,8 +98,11 @@ class HookedNoteBook(tv_notebook.PlainTextNoteBook):
 
     The background read waits for `warmer_gate` to be set or, if it is None,
     for the notebook to be closed; `warmer_finished` is set when it ends.
-    `during_next_read`, if set, is called once, after the next note file has
-    been read but before the read is stored. `before_next_write`, if set, is
+    `before_next_read`, if set, is called once, just before the next note
+    file is opened. `during_next_read`, if set, is called once, after the
+    next note file has been read but before the read is stored.
+    `after_next_check`, if set, is called once, after the notebook next
+    checks whether a path is a note file to index. `before_next_write`, if set, is
     called once, after `create` or `rename` has checked the target path but
     before it writes, as another process could.
     """
@@ -107,7 +110,9 @@ class HookedNoteBook(tv_notebook.PlainTextNoteBook):
     def __init__(self, *args, warmer_gate=None, **kwargs):
         self.warmer_gate = warmer_gate
         self.warmer_finished = threading.Event()
+        self.before_next_read = None
         self.during_next_read = None
+        self.after_next_check = None
         self.before_next_write = None
         super().__init__(*args, **kwargs)
 
@@ -117,6 +122,13 @@ class HookedNoteBook(tv_notebook.PlainTextNoteBook):
             action()
         super()._in_new_parents(abspath, make, failure)
 
+    def _indexable(self, abspath, real_parent=None):
+        indexable = super()._indexable(abspath, real_parent)
+        action, self.after_next_check = self.after_next_check, None
+        if action is not None:
+            action()
+        return indexable
+
     def _read_all(self):
         gate = self._closed if self.warmer_gate is None else self.warmer_gate
         gate.wait(timeout=10)
@@ -124,6 +136,9 @@ class HookedNoteBook(tv_notebook.PlainTextNoteBook):
         self.warmer_finished.set()
 
     def _read(self, abspath, title):
+        action, self.before_next_read = self.before_next_read, None
+        if action is not None:
+            action()
         contents = super()._read(abspath, title)
         action, self.during_next_read = self.during_next_read, None
         if action is not None:
@@ -317,6 +332,31 @@ class TestContainerProtocol:
         assert tv_notebook.PlainTextNote("first_note", nb, ".md") not in nb
         assert tv_notebook.PlainTextNote("nonexistent", nb, ".txt") not in nb
         assert "first_note" not in nb
+
+    def test_note_at(self, populated_notes_dir, unwatched_notebook):
+        nb = unwatched_notebook(populated_notes_dir)
+        note = next(n for n in nb if n.title == "first_note")
+
+        assert nb.note_at(note.abspath) is note
+        assert nb.note_at(os.path.join(nb.path, "first_note.md")) is None
+        assert nb.note_at(os.path.join(nb.path, "nonexistent.txt")) is None
+        assert nb.note_at(os.path.join(os.path.dirname(nb.path), "first_note.txt")) is None
+
+    def test_note_at_gives_the_note_that_replaced_another(
+        self, populated_notes_dir, unwatched_notebook
+    ):
+        nb = unwatched_notebook(populated_notes_dir)
+        note = next(n for n in nb if n.title == "first_note")
+        handler = FileEventHandler(nb)
+        os.remove(note.abspath)
+        handler.on_deleted(FileDeletedEvent(note.abspath))
+        Path(note.abspath).write_text("again")
+        handler.on_created(FileCreatedEvent(note.abspath))
+
+        current = nb.note_at(note.abspath)
+
+        assert current is not None and current is not note
+        assert current.title == "first_note"
 
     def test_iteration_is_a_snapshot(self, populated_notes_dir, unwatched_notebook):
         nb = unwatched_notebook(populated_notes_dir)
@@ -1159,7 +1199,9 @@ class TestRenameAndDeleteWithRealWatcher:
             os.rename(b, a)
         self.settle(nb, wait_until)
 
-        assert all("a" in snapshot for snapshot in snapshots), snapshots
+        # The file always exists, as a or as b, so the index is never empty;
+        # which of them it holds lags behind the renames.
+        assert snapshots and all(snapshots), snapshots
         assert titles(nb) == ["a"]
 
     def test_delete(self, populated_notes_dir, notebook, wait_until):
@@ -1184,6 +1226,93 @@ class TestFileEventHandler:
         FileEventHandler(nb).on_created(FileCreatedEvent(str(path)))
 
         assert titles(nb) == ["external"]
+
+    def test_file_deleted_before_a_created_event_reads_it_is_not_added(
+        self, temp_notes_dir, unwatched_notebook, caplog
+    ):
+        nb = unwatched_notebook(temp_notes_dir, cls=HookedNoteBook)
+        changes = ChangeRecorder(nb)
+        nb.on_change = changes
+        path = Path(nb.path, "fleeting.txt")
+        path.write_text("x")
+        nb.before_next_read = path.unlink
+
+        with caplog.at_level(logging.DEBUG, logger="tv3"):
+            FileEventHandler(nb).on_created(FileCreatedEvent(str(path)))
+
+        assert titles(nb) == []
+        assert changes.calls == 0
+        assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+        assert any("fleeting.txt" in r.message for r in caplog.records)
+
+    @pytest.mark.parametrize("event", [FileModifiedEvent, FileCreatedEvent])
+    def test_note_deleted_before_an_event_rereads_it_is_removed(
+        self, temp_notes_dir, write_notes, unwatched_notebook, caplog, event
+    ):
+        write_notes(temp_notes_dir, {"a.txt": "x", "b.txt": "y"})
+        nb = unwatched_notebook(temp_notes_dir, cls=HookedNoteBook)
+        changes = ChangeRecorder(nb)
+        nb.on_change = changes
+        path = Path(nb.path, "a.txt")
+        nb.before_next_read = path.unlink
+
+        with caplog.at_level(logging.DEBUG, logger="tv3"):
+            FileEventHandler(nb).dispatch(event(str(path)))
+
+        assert titles(nb) == ["b"]
+        assert changes.calls == 1
+        assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+    def test_refresh_of_a_deleted_note_removes_it(
+        self, temp_notes_dir, write_notes, unwatched_notebook, caplog
+    ):
+        write_notes(temp_notes_dir, {"a.txt": "x"})
+        nb = unwatched_notebook(temp_notes_dir)
+        (note,) = list(nb)
+        os.remove(note.abspath)
+
+        with caplog.at_level(logging.DEBUG, logger="tv3"):
+            assert nb.refresh(note) is True
+
+        assert note not in nb
+        assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+    def test_move_whose_file_moves_on_between_checks_keeps_the_note(
+        self, temp_notes_dir, write_notes, unwatched_notebook, caplog
+    ):
+        write_notes(temp_notes_dir, {"a.txt": "x"})
+        nb = unwatched_notebook(temp_notes_dir, cls=HookedNoteBook)
+        changes = ChangeRecorder(nb)
+        nb.on_change = changes
+        a, b = os.path.join(nb.path, "a.txt"), os.path.join(nb.path, "b.txt")
+        os.rename(a, b)
+        os.rename(b, a)
+        # The event for a -> b arrives after the file moved back; it moves to
+        # b again once the destination has been checked.
+        nb.after_next_check = lambda: os.rename(a, b)
+
+        with caplog.at_level(logging.DEBUG, logger="tv3"):
+            FileEventHandler(nb).on_moved(FileMovedEvent(a, b))
+
+        assert titles(nb) == ["b"]
+        assert changes.calls == 1
+        assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+    def test_move_whose_destination_is_gone_before_its_read_keeps_the_source(
+        self, temp_notes_dir, write_notes, unwatched_notebook, caplog
+    ):
+        write_notes(temp_notes_dir, {"a.txt": "x"})
+        nb = unwatched_notebook(temp_notes_dir, cls=HookedNoteBook)
+        a, b = os.path.join(nb.path, "a.txt"), os.path.join(nb.path, "b.txt")
+        os.rename(a, b)
+        nb.before_next_read = lambda: os.rename(b, a)
+
+        with caplog.at_level(logging.DEBUG, logger="tv3"):
+            FileEventHandler(nb).on_moved(FileMovedEvent(a, b))
+
+        assert titles(nb) == ["a"]
+        assert Path(a).read_text() == "x"
+        assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
 
     def test_created_for_deleted_file_does_not_resurrect_it(
         self, populated_notes_dir, unwatched_notebook

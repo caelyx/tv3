@@ -541,9 +541,10 @@ class MainFrame(urwid.Frame):
 
     def _stale(self, note):
         """Why `note` is no longer the notebook's note for its file, or None if it is."""
-        if note not in self.tv_notebook:
+        current = self.tv_notebook.note_at(note.abspath)
+        if current != note:
             return f"'{note.title}' no longer exists"
-        if not any(current is note for current in self.tv_notebook):
+        if current is not note:
             return f"'{note.title}' changed on disk"
         return None
 

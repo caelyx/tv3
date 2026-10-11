@@ -227,11 +227,14 @@ class PlainTextNote:
         return cached.mtime
 
     def _loaded(self) -> _Contents:
-        """The cached file, reading it first if it has not been read."""
+        """The cached file, reading it first if it has not been read.
+
+        A file that cannot be read is logged and read as empty.
+        """
         cached = self._cached
         if isinstance(cached, _Contents):
             return cached
-        contents = self._read()
+        contents = self._notebook._read_or_empty(self._abspath, self._title)
         self._store_if_unchanged(cached, contents)
         return contents
 
@@ -240,6 +243,9 @@ class PlainTextNote:
 
         If another read is stored while this one runs, reads again, so what
         this stores is never older than what it replaces.
+
+        Raises:
+            FileNotFoundError: the file is gone; nothing is stored.
         """
         old = self._cached
         seen = old
@@ -556,14 +562,38 @@ class PlainTextNoteBook:
         return self._refresh(note.abspath)
 
     def _read(self, abspath: str, title: str) -> _Contents:
-        """Read the note file at `abspath`, up to MAX_INDEXED_BYTES bytes of it."""
+        """Read the note file at `abspath`, up to MAX_INDEXED_BYTES bytes of it.
+
+        Any error but the file being gone is logged, and the file read as empty.
+
+        Raises:
+            FileNotFoundError: there is no file at `abspath`.
+        """
         try:
             with open(abspath, "rb") as fp:
                 mtime = os.fstat(fp.fileno()).st_mtime
                 data = fp.read(MAX_INDEXED_BYTES + 1)
+        except FileNotFoundError:
+            raise
         except OSError as e:
             logger.error(f"Error reading note {abspath}: {e}")
             mtime, data = 0.0, b""
+        return self._contents(abspath, title, mtime, data)
+
+    def _read_or_empty(self, abspath: str, title: str) -> _Contents:
+        """`_read`, but a missing file is logged as an error and read as empty.
+
+        For reads of a file this process expects to exist, such as one it has
+        just created; the watcher reports a file that is gone.
+        """
+        try:
+            return self._read(abspath, title)
+        except FileNotFoundError as e:
+            logger.error(f"Error reading note {abspath}: {e}")
+            return self._contents(abspath, title, 0.0, b"")
+
+    def _contents(self, abspath: str, title: str, mtime: float, data: bytes) -> _Contents:
+        """The cached form of a note file at `abspath` that holds `data`."""
         if len(data) > MAX_INDEXED_BYTES:
             data = data[:MAX_INDEXED_BYTES]
             self._log_truncated(abspath)
@@ -583,7 +613,7 @@ class PlainTextNoteBook:
         )
 
     def _read_relpath(self, relpath: str) -> _Contents:
-        return self._read(os.path.join(self._path, relpath), os.path.splitext(relpath)[0])
+        return self._read_or_empty(os.path.join(self._path, relpath), os.path.splitext(relpath)[0])
 
     def _read_all(self) -> None:
         """Read every note not read yet, until done or the notebook is closed."""
@@ -905,7 +935,8 @@ class PlainTextNoteBook:
         """Track the existing note file at `abspath`. Never writes to disk.
 
         With `read`, reads the file now; otherwise caches only its mtime.
-        Returns True if a note was added.
+        Returns True if a note was added. A file that is gone by the time it
+        is read is not added: a later event reports where it went.
         """
         indexable = self._indexable(abspath, real_parent)
         if indexable is None:
@@ -917,7 +948,11 @@ class PlainTextNoteBook:
             with self._notes_lock:
                 if key in self._notes:
                     return False
-            cached = self._read_relpath(relpath)
+            try:
+                cached = self._read(os.path.join(self._path, relpath), os.path.splitext(relpath)[0])
+            except FileNotFoundError:
+                logger.debug(f"{abspath} was gone before it could be read")
+                return False
         else:
             cached = _Stat(mtime)
         with self._notes_lock:
@@ -927,13 +962,18 @@ class PlainTextNoteBook:
         return True
 
     def _refresh(self, abspath: str) -> bool:
-        """Re-read the note at `abspath`, if tracked. Returns True if it changed."""
-        relpath = self._relpath(abspath)
-        if relpath is None:
+        """Re-read the note at `abspath`, if tracked. Returns True if it changed.
+
+        A note whose file is gone is no longer tracked, which is a change.
+        """
+        note = self.note_at(abspath)
+        if note is None:
             return False
-        with self._notes_lock:
-            note = self._notes.get(self._key(relpath))
-        return note is not None and note._refresh()
+        try:
+            return note._refresh()
+        except FileNotFoundError:
+            logger.debug(f"{abspath} was gone when re-read")
+            return self._unregister(abspath, only_if_missing=True)
 
     def _same_key(self, src: str, dest: str) -> bool:
         """Whether `src` and `dest` differ only in case or Unicode normalisation.
@@ -1060,13 +1100,19 @@ class PlainTextNoteBook:
             return iter(list(self._notes.values()))
 
     def __contains__(self, note: object) -> bool:
-        if not isinstance(note, PlainTextNote):
-            return False
-        relpath = self._relpath(note.abspath)
+        return isinstance(note, PlainTextNote) and self.note_at(note.abspath) == note
+
+    def note_at(self, abspath: str) -> PlainTextNote | None:
+        """The note for the file at `abspath`, or None if the notebook has none.
+
+        On a case-insensitive filesystem, `abspath` may differ from the
+        note's path in case.
+        """
+        relpath = self._relpath(abspath)
         if relpath is None:
-            return False
+            return None
         with self._notes_lock:
-            return self._notes.get(self._key(relpath)) == note
+            return self._notes.get(self._key(relpath))
 
 
 class FileEventHandler(FileSystemEventHandler):
@@ -1122,12 +1168,27 @@ class FileEventHandler(FileSystemEventHandler):
             nb = self._notebook
             if not event.is_directory and nb._tracked_as(src, dest):
                 return nb._refresh(dest)
-            # Events arrive after the fact: a source that exists again stays,
-            # unless it exists only as the destination under another case.
-            removed = self._removed(
-                src, event.is_directory, only_if_missing=not nb._same_key(src, dest)
-            )
+            if nb._same_key(src, dest):
+                # One file under two spellings: the source's entry is the
+                # destination's, so it goes before the destination is added.
+                removed = self._removed(src, event.is_directory)
+                added = self._added(dest, event.is_directory)
+                return removed or added
+            # Events arrive after the fact, and the file may have moved again
+            # since: a source that exists again stays. The destination is
+            # added before the source is dropped, and if neither is then
+            # tracked although one is a note file, the file moved between
+            # the checks and both are checked again.
             added = self._added(dest, event.is_directory)
+            removed = self._removed(src, event.is_directory, only_if_missing=True)
+            while (
+                removed
+                and not event.is_directory
+                and nb.note_at(src) is None
+                and nb.note_at(dest) is None
+                and (nb._indexable(src) is not None or nb._indexable(dest) is not None)
+            ):
+                added = self._added(dest, False) or self._added(src, False) or added
             return removed or added
 
         self._handle(event, apply)
