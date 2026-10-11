@@ -102,10 +102,11 @@ log_file = ~/.tvlog
 
 - `Enter`: Open selected note in editor (or create new note if typed a new title)
 - `Esc`, `Ctrl-D`, `Ctrl-U`: Clear selection/search or quit
-- `Ctrl-Q`, `Ctrl-X`: Quit application
+- `Ctrl-Q`, `Ctrl-X`, `Ctrl-C`: Quit application (while the editor runs, `Ctrl-C` goes to the editor only)
 - `Tab`, `Left`, `Right`: Accept autocomplete suggestion
 - `Up`/`Down`, `Page Up`/`Page Down`: Navigate note list
 - `Backspace`: Delete search text or clear autocomplete
+- Typing or `Backspace` while a navigated-to note's title replaces the search text edits that title
 
 ## Code Notes
 
