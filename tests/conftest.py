@@ -153,12 +153,19 @@ def write_notes():
 def notebook():
     """Factory for PlainTextNoteBooks that are always closed at teardown.
 
-    Defaults: extension ".txt", extensions [".txt", ".md"].
+    Defaults: extension ".txt", extensions [".txt", ".md"]. `cls` makes an
+    instance of a PlainTextNoteBook subclass instead.
     """
     notebooks = []
 
-    def make(path, extension=".txt", extensions=(".txt", ".md"), **kwargs):
-        nb = tv_notebook.PlainTextNoteBook(str(path), extension, list(extensions), **kwargs)
+    def make(
+        path,
+        extension=".txt",
+        extensions=(".txt", ".md"),
+        cls=tv_notebook.PlainTextNoteBook,
+        **kwargs,
+    ):
+        nb = cls(str(path), extension, list(extensions), **kwargs)
         notebooks.append(nb)
         return nb
 
