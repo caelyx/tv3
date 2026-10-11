@@ -16,7 +16,8 @@ class RecordingScreen(urwid.BaseScreen):
     """A headless urwid screen.
 
     `events` records "stop"/"start" calls, each paired with `probe()` at
-    the time of the call; `lines` holds the text of the last drawn canvas.
+    the time of the call; `drawn` holds the text of every drawn canvas, and
+    `lines` the last.
     Setting `start_error` makes `start()` raise it.
     """
 
@@ -25,8 +26,12 @@ class RecordingScreen(urwid.BaseScreen):
         self.size = size
         self.events = []
         self.probe = lambda: None
-        self.lines = []
+        self.drawn = []
         self.start_error = None
+
+    @property
+    def lines(self):
+        return self.drawn[-1] if self.drawn else []
 
     def start(self, *args, **kwargs):
         self.events.append(("start", self.probe()))
@@ -48,7 +53,7 @@ class RecordingScreen(urwid.BaseScreen):
         return self.size
 
     def draw_screen(self, size, canvas):
-        self.lines = [row.decode() for row in canvas.text]
+        self.drawn.append([row.decode() for row in canvas.text])
 
 
 class ScriptedScreen(RecordingScreen):
@@ -92,9 +97,14 @@ class ScriptedScreen(RecordingScreen):
 
 
 def press(frame, *keys):
-    """Send `keys` one at a time, rendering after each as the main loop does."""
+    """Send `keys` one at a time, as the main loop handles keys that arrive apart.
+
+    After each key the loop goes idle, which runs any pending refilter,
+    and redraws.
+    """
     for key in keys:
         frame.keypress(SIZE, key)
+        frame.flush_filter()
         frame.render(SIZE, focus=True)
 
 
@@ -138,6 +148,32 @@ def status_line(frame):
     if frame.footer is None:
         return ""
     return screen_lines(frame)[-1].strip()
+
+
+def feed(frame, keys, before=None):
+    """Run the frame's main loop until it handles `keys` as one batch of input and redraws.
+
+    The batch arrives once the loop has drawn its first screen, straight
+    after calling `before()` if given. Returns the lines of the first
+    screen drawn after the batch.
+    """
+    loop = frame.loop
+    screen = loop.screen
+    drawn_at_start = len(screen.drawn)
+    drawn_before = []
+
+    def send(loop, _data):
+        if len(screen.drawn) == drawn_at_start:
+            loop.set_alarm_in(0, send)
+            return
+        drawn_before.append(len(screen.drawn))
+        if before is not None:
+            before()
+        loop.process_input(list(keys))
+
+    loop.set_alarm_in(0, send)
+    assert run_headless(loop, lambda: bool(drawn_before) and len(screen.drawn) > drawn_before[0])
+    return screen.drawn[drawn_before[0]]
 
 
 def run_headless(loop, until, timeout=5.0, interval=0.01):

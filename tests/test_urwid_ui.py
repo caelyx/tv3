@@ -24,6 +24,7 @@ from tests.ui_helpers import (
     FOCUSED,
     SIZE,
     ScriptedScreen,
+    feed,
     highlighted,
     list_lines,
     press,
@@ -617,6 +618,114 @@ with open({str(log)!r}, "a") as log:
 
         assert status_line(frame) == "Could not run editor vim 'unbalanced: No closing quotation"
         assert frame.loop.screen.events == []
+
+
+def _count_searches(monkeypatch, frame):
+    """Record each query `frame`'s notebook searches for, still searching."""
+    queries = []
+    search = frame.tv_notebook.search
+
+    def counting_search(query):
+        queries.append(query)
+        return search(query)
+
+    monkeypatch.setattr(frame.tv_notebook, "search", counting_search)
+    return queries
+
+
+class TestInputBatches:
+    """Keys that reach the main loop together refilter the list once."""
+
+    def test_burst_of_typing_refilters_once_before_the_redraw(self, make_frame, monkeypatch):
+        frame = make_frame({"foo.txt": "", "foo bar.txt": "", "other.txt": "foo"})
+        press(frame, "f")
+        assert highlighted(frame) == ["foo bar"]
+        queries = _count_searches(monkeypatch, frame)
+
+        drawn = feed(frame, "oo b")
+
+        assert queries == ["foo b"]
+        assert drawn[1].strip(" │┃") == "foo bar"
+        assert [line.strip() for line in drawn[3:] if line.strip()] == ["foo bar"]
+        assert highlighted(frame) == ["foo bar"]
+
+    def test_single_key_is_filtered_in_its_first_redraw(self, make_frame, monkeypatch):
+        frame = make_frame({"foo.txt": "", "bar.txt": ""})
+        queries = _count_searches(monkeypatch, frame)
+
+        drawn = feed(frame, "f")
+
+        assert queries == ["f"]
+        assert drawn[1].strip(" │┃") == "foo"
+        assert [line.strip() for line in drawn[3:] if line.strip()] == ["foo"]
+
+    def test_enter_straight_after_typing_opens_the_completed_note(
+        self, make_frame, stub_editor, notes_dir
+    ):
+        frame = make_frame({"alpha.txt": "", "zeta.txt": ""})
+
+        feed(frame, ["a", "l", "enter"])
+
+        assert stub_editor.calls() == [[str(notes_dir / "alpha.txt")]]
+        assert sorted(p.name for p in notes_dir.iterdir()) == ["alpha.txt", "zeta.txt"]
+        assert highlighted(frame) == ["alpha"]
+
+    def test_tab_straight_after_typing_completes_the_title(self, make_frame):
+        frame = make_frame({"foo.txt": "", "foo bar.txt": ""})
+
+        drawn = feed(frame, ["f", "o", "tab", "x"])
+
+        assert frame.search_box.edit_text == "foo barx"
+        assert drawn[1].strip(" │┃") == "foo barx"
+
+    def test_backspace_straight_after_typing_removes_only_the_completion(self, make_frame):
+        frame = make_frame({"foo bar.txt": "", "zed.txt": ""})
+
+        feed(frame, ["f", "o", "backspace"])
+
+        assert frame.search_box.edit_text == "fo"
+        assert search_line(frame) == "fo"
+        assert highlighted(frame) == []
+
+    def test_click_straight_after_typing_picks_from_the_filtered_list(self, make_frame):
+        frame = make_frame({"apple.txt": "fruit", "banana.txt": "fruit", "cherry.txt": ""})
+
+        feed(frame, ["f", "r", "u", "i", "t", ("mouse press", 1, 5, 4)])
+
+        assert list_lines(frame) == ["banana", "apple"]
+        assert highlighted(frame) == ["apple"]
+
+    def test_typing_burst_on_a_navigated_note_appends_to_its_title(self, make_frame):
+        frame = make_frame({"zeta.txt": "", "alpha.txt": ""})
+        press(frame, "down", "down")
+        assert highlighted(frame) == ["zeta"]
+
+        drawn = feed(frame, "xy")
+
+        assert frame.search_box.edit_text == "zetaxy"
+        assert drawn[1].strip(" │┃") == "zetaxy"
+
+    def test_notebook_change_while_typing_joins_the_same_refilter(
+        self, make_frame, notes_dir, monkeypatch
+    ):
+        frame = make_frame({"foo.txt": "", "bar.txt": ""})
+        frame.tv_notebook.close()
+        queries = _count_searches(monkeypatch, frame)
+        path = notes_dir / "fourteen.txt"
+        path.write_text("")
+        handler = tv_notebook.FileEventHandler(frame.tv_notebook)
+
+        def change():
+            thread = threading.Thread(target=handler.dispatch, args=(FileCreatedEvent(str(path)),))
+            thread.start()
+            thread.join()
+
+        drawn = feed(frame, ["f", "o"], before=change)
+
+        assert queries == ["fo"]
+        assert drawn[1].strip(" │┃") == "fourteen"
+        assert [line.strip() for line in drawn[3:] if line.strip()] == ["fourteen", "foo"]
+        assert highlighted(frame) == ["fourteen"]
 
 
 class TestNotebookChanges:
