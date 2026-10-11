@@ -4,6 +4,7 @@ import logging
 import os
 import shutil
 import threading
+import tracemalloc
 import unicodedata
 from pathlib import Path
 
@@ -87,6 +88,35 @@ class ChangeRecorder:
             self.nb._notes_lock.release()
 
 
+class HookedNoteBook(tv_notebook.PlainTextNoteBook):
+    """A real notebook whose reads can be held back or interleaved with other work.
+
+    The background read waits for `warmer_gate` to be set or, if it is None,
+    for the notebook to be closed; `warmer_finished` is set when it ends.
+    `during_next_read`, if set, is called once, after the next note file has
+    been read but before the read is stored.
+    """
+
+    def __init__(self, *args, warmer_gate=None, **kwargs):
+        self.warmer_gate = warmer_gate
+        self.warmer_finished = threading.Event()
+        self.during_next_read = None
+        super().__init__(*args, **kwargs)
+
+    def _read_all(self):
+        gate = self._closed if self.warmer_gate is None else self.warmer_gate
+        gate.wait(timeout=10)
+        super()._read_all()
+        self.warmer_finished.set()
+
+    def _read(self, abspath, title):
+        contents = super()._read(abspath, title)
+        action, self.during_next_read = self.during_next_read, None
+        if action is not None:
+            action()
+        return contents
+
+
 class TestPlainTextNote:
     def test_attributes(self, temp_notes_dir, unwatched_notebook):
         nb = unwatched_notebook(temp_notes_dir)
@@ -127,6 +157,16 @@ class TestPlainTextNote:
         nb = unwatched_notebook(temp_notes_dir)
 
         assert tv_notebook.PlainTextNote("m", nb, ".txt").mtime == 1234.5
+
+    def test_mtime_of_missing_file_is_zero_and_logged(
+        self, temp_notes_dir, unwatched_notebook, caplog
+    ):
+        nb = unwatched_notebook(temp_notes_dir)
+
+        with caplog.at_level(logging.ERROR, logger="tv3"):
+            assert tv_notebook.PlainTextNote("missing", nb, ".txt").mtime == 0.0
+
+        assert any("Error getting mtime" in r.message for r in caplog.records)
 
     def test_equality_and_hash(self, temp_notes_dir, unwatched_notebook):
         nb = unwatched_notebook(temp_notes_dir)
@@ -1029,42 +1069,173 @@ class TestContentCache:
         assert nb.refresh(held) is True
         assert self.found(nb, "new") == ["a"]
 
-    def test_read_that_raced_with_event_does_not_overwrite_it(
+    def test_search_read_that_raced_with_event_does_not_overwrite_it(
         self, temp_notes_dir, write_notes, unwatched_notebook
     ):
-        nb, handler = self.make(temp_notes_dir, write_notes, unwatched_notebook, {"a.txt": "old"})
+        write_notes(temp_notes_dir, {"a.txt": "old"})
+        nb = unwatched_notebook(temp_notes_dir, cls=HookedNoteBook)
+        handler = FileEventHandler(nb)
         (note,) = list(nb)
-        seen = note._cached
-        stale = note._read()
-        Path(note.abspath).write_text("new")
-        handler.on_modified(FileModifiedEvent(note.abspath))
 
-        note._store_if_unchanged(seen, stale)
+        def edit_and_report():
+            Path(note.abspath).write_text("new")
+            handler.on_modified(FileModifiedEvent(note.abspath))
 
+        nb.during_next_read = edit_and_report
+
+        assert self.found(nb, "old") == ["a"]
+        assert self.found(nb, "new") == ["a"]
         assert note.contents == "new"
 
+    def test_refresh_that_raced_with_event_does_not_overwrite_it(
+        self, temp_notes_dir, write_notes, unwatched_notebook
+    ):
+        write_notes(temp_notes_dir, {"a.txt": "old"})
+        nb = unwatched_notebook(temp_notes_dir, cls=HookedNoteBook)
+        handler = FileEventHandler(nb)
+        (note,) = list(nb)
+        assert self.found(nb, "old") == ["a"]
+
+        def edit_and_report():
+            Path(note.abspath).write_text("new")
+            handler.on_modified(FileModifiedEvent(note.abspath))
+
+        nb.during_next_read = edit_and_report
+
+        assert nb.refresh(note) is True
+        assert self.found(nb, "old") == []
+        assert self.found(nb, "new") == ["a"]
+
     def test_unreadable_note_is_logged_once_and_searched_as_empty(
-        self, temp_notes_dir, unwatched_notebook, caplog
+        self, temp_notes_dir, write_notes, unwatched_notebook, caplog
+    ):
+        write_notes(temp_notes_dir, {"a.txt": "x"})
+        nb = unwatched_notebook(temp_notes_dir, cls=HookedNoteBook)
+        os.remove(Path(nb.path, "a.txt"))
+
+        with caplog.at_level(logging.ERROR, logger="tv3"):
+            assert self.found(nb, "x") == []
+            assert self.found(nb, "a") == ["a"]
+
+        assert len([r for r in caplog.records if "Error reading note" in r.message]) == 1
+
+    def test_directory_added_later_is_read_when_it_is_added(
+        self, temp_notes_dir, unwatched_notebook
     ):
         nb = unwatched_notebook(temp_notes_dir)
         sub = Path(nb.path, "sub")
         sub.mkdir()
-        (sub / "a.txt").write_text("x")
+        (sub / "a.txt").write_text("apple")
+        (sub / "b.txt").write_text("banana")
+
         FileEventHandler(nb).on_created(DirCreatedEvent(str(sub)))
-        os.remove(sub / "a.txt")
+        for path in sub.iterdir():
+            path.unlink()
 
-        with caplog.at_level(logging.ERROR, logger="tv3"):
-            assert self.found(nb, "x") == []
-            assert self.found(nb, "a") == [os.path.join("sub", "a")]
+        assert self.found(nb, "apple") == [os.path.join("sub", "a")]
+        assert self.found(nb, "banana") == [os.path.join("sub", "b")]
 
-        assert len([r for r in caplog.records if "Error reading note" in r.message]) == 1
+    def test_directory_moved_in_is_read_when_it_is_moved(self, temp_notes_dir, unwatched_notebook):
+        nb = unwatched_notebook(temp_notes_dir)
+        hidden = Path(nb.path, ".incoming")
+        hidden.mkdir()
+        (hidden / "a.txt").write_text("apple")
+        dest = Path(nb.path, "sub")
+        os.rename(hidden, dest)
+
+        FileEventHandler(nb).on_moved(DirMovedEvent(str(hidden), str(dest)))
+        (dest / "a.txt").unlink()
+
+        assert self.found(nb, "apple") == [os.path.join("sub", "a")]
+
+
+MIB = 1024 * 1024
+
+
+class TestSizeCap:
+    """Only the first MiB of a note is kept in memory and searched."""
+
+    def found(self, nb, query):
+        return sorted(n.title for n in nb.search(query))
+
+    def test_only_the_first_mebibyte_is_searched(self, temp_notes_dir, unwatched_notebook):
+        Path(temp_notes_dir, "big.txt").write_bytes(b"head " + b"x" * MIB + b" tail")
+        nb = unwatched_notebook(temp_notes_dir)
+
+        assert self.found(nb, "head") == ["big"]
+        assert self.found(nb, "tail") == []
+        (note,) = list(nb)
+        assert len(note.contents) == MIB
+
+    def test_a_note_of_exactly_one_mebibyte_is_not_truncated(
+        self, temp_notes_dir, unwatched_notebook, caplog
+    ):
+        Path(temp_notes_dir, "edge.txt").write_bytes(b"x" * (MIB - 4) + b"tail")
+        nb = unwatched_notebook(temp_notes_dir)
+
+        with caplog.at_level(logging.INFO, logger="tv3"):
+            assert self.found(nb, "tail") == ["edge"]
+
+        assert not [r for r in caplog.records if "truncated" in r.message]
+
+    def test_character_cut_at_the_limit_is_replaced(self, temp_notes_dir, unwatched_notebook):
+        Path(temp_notes_dir, "cut.txt").write_bytes(b"a" * (MIB - 1) + "é tail".encode())
+        nb = unwatched_notebook(temp_notes_dir)
+        (note,) = list(nb)
+
+        assert note.contents == "a" * (MIB - 1) + "�"
+        assert self.found(nb, "é") == []
+        assert self.found(nb, "a�") == ["cut"]
+        assert self.found(nb, "A�") == []
+        assert nb.refresh(note) is False
+
+    def test_large_note_is_not_read_whole(self, temp_notes_dir, unwatched_notebook):
+        Path(temp_notes_dir, "huge.txt").write_bytes(b"y" * (32 * MIB))
+        nb = unwatched_notebook(temp_notes_dir, cls=HookedNoteBook)
+        tracemalloc.start()
+        try:
+            self.found(nb, "y")
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+
+        assert peak < 8 * MIB
+
+    def test_lowercase_note_is_stored_once(self, temp_notes_dir, unwatched_notebook):
+        Path(temp_notes_dir, "lower.txt").write_bytes(b"z" * MIB)
+        nb = unwatched_notebook(temp_notes_dir, cls=HookedNoteBook)
+        tracemalloc.start()
+        try:
+            self.found(nb, "z")
+            retained, _ = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+
+        assert retained < 1.5 * MIB
+
+    def test_truncation_is_logged_once_per_file(self, temp_notes_dir, unwatched_notebook, caplog):
+        path = Path(temp_notes_dir, "big.txt")
+        path.write_bytes(b"x" * (2 * MIB))
+        nb = unwatched_notebook(temp_notes_dir, cls=HookedNoteBook)
+        handler = FileEventHandler(nb)
+
+        with caplog.at_level(logging.INFO, logger="tv3"):
+            self.found(nb, "x")
+            path.write_bytes(b"y" * (2 * MIB))
+            handler.on_modified(FileModifiedEvent(str(path)))
+            assert self.found(nb, "y") == ["big"]
+
+        logged = [r for r in caplog.records if "truncated" in r.message]
+        assert len(logged) == 1
+        assert logged[0].levelno == logging.INFO
+        assert path.name in logged[0].getMessage()
 
 
 class TestBackgroundRead:
     def test_notes_are_read_after_startup(self, temp_notes_dir, write_notes, notebook):
         write_notes(temp_notes_dir, {f"n{i}.txt": f"word{i}" for i in range(50)})
         nb = notebook(temp_notes_dir)
-        nb._warmer.join()
+        assert len(nb.search("word")) == 50
         nb.close()
         for path in Path(temp_notes_dir).iterdir():
             path.unlink()
@@ -1074,12 +1245,37 @@ class TestBackgroundRead:
 
     def test_close_stops_background_read(self, temp_notes_dir, write_notes, notebook):
         write_notes(temp_notes_dir, {f"n{i}.txt": "x" for i in range(50)})
-        nb = notebook(temp_notes_dir)
-        warmer = nb._warmer
+        nb = notebook(temp_notes_dir, cls=HookedNoteBook)
 
         nb.close()
+        assert nb.warmer_finished.is_set()
+        for path in Path(temp_notes_dir).iterdir():
+            path.unlink()
 
-        assert not warmer.is_alive()
+        assert nb.search("x") == []
+
+    def test_empty_search_does_not_wait_for_background_read(
+        self, temp_notes_dir, write_notes, notebook
+    ):
+        write_notes(temp_notes_dir, {f"n{i}.txt": "x" for i in range(50)})
+        gate = threading.Event()
+        nb = notebook(temp_notes_dir, cls=HookedNoteBook, warmer_gate=gate)
+        try:
+            assert len(nb.search("")) == 50
+            assert len(nb.search("  ")) == 50
+            assert not nb.warmer_finished.is_set()
+            assert sorted(n.mtime for n in nb) == [BASE_MTIME + i for i in range(50)]
+        finally:
+            gate.set()
+
+    def test_search_waits_for_background_read(self, temp_notes_dir, write_notes, notebook):
+        write_notes(temp_notes_dir, {f"n{i}.txt": "x" for i in range(50)})
+        gate = threading.Event()
+        nb = notebook(temp_notes_dir, cls=HookedNoteBook, warmer_gate=gate)
+        threading.Timer(0.05, gate.set).start()
+
+        assert len(nb.search("x")) == 50
+        assert nb.warmer_finished.is_set()
 
 
 @pytest.mark.slow

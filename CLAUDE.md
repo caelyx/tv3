@@ -114,3 +114,5 @@ log_file = ~/.tvlog
 - Note titles can include directory separators for organizing notes in subdirectories
 - The `PlainTextNote.contents` property handles UTF-8 decoding with error tolerance
 - Search is case-insensitive if search terms are lowercase, case-sensitive otherwise
+- Only the first 1 MiB of a note is searchable; the rest is not read
+- Changes made to a network-mounted notes folder by other machines may not be seen until the file is changed again locally or tv3 restarts: the watcher only reports local filesystem events
