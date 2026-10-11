@@ -258,10 +258,6 @@ class PlainTextNoteBook:
         logger.debug(f"Created note {abspath}")
         return note
 
-    def add_new(self, filename: str) -> PlainTextNote:
-        """Alias of `create`, kept for callers not yet using it."""
-        return self.create(filename)
-
     def _fold(self, s: str) -> str:
         return s.casefold() if self._case_insensitive else s
 

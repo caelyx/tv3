@@ -102,7 +102,8 @@ open htmlcov/index.html
 - **`populated_notes_dir`**: Notes directory with 4 sample `.txt`/`.md` notes
 - **`nested_notes_dir`**: Notes directory with `work/`, `personal/` and `archive/` subdirectories
 - **`sample_config`**: A `~/.tvrc`-style config file pointing at `temp_notes_dir`
-- **`mock_editor`**: Stub editor shell script that touches the file it is given and sets `$EDITOR` to itself (currently not used by any test)
+- **`stub_editor`** / **`make_stub_editor`**: A real executable standing in for `$EDITOR`; records each run's arguments and can be made to fail
+- **`make_frame`**: A `MainFrame` on a real notebook in `notes_dir`, attached to a headless `urwid.MainLoop` (see `tests/ui_helpers.py`)
 
 ## Continuous Integration
 

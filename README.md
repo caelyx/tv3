@@ -50,6 +50,7 @@ git pull && uv tool upgrade tv3
 
 Run `tv3 [notes_dir]`; the notes directory defaults to `~/Notes`. Defaults can
 be set in `~/.tvrc`; see `tv3 --help` for all options.
+The editor is split like a shell command, so quote a path that contains spaces.
 
 ## Development
 

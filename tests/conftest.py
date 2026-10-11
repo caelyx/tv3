@@ -1,12 +1,19 @@
 """Pytest configuration and shared fixtures for tv3 tests."""
 
+import json
 import os
+import shlex
+import sys
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
+import urwid
 
-from tv3 import tv_notebook
+from tests.ui_helpers import RecordingScreen
+from tv3 import tv_notebook, urwid_ui
 
 BASE_MTIME = 1_700_000_000
 
@@ -78,23 +85,64 @@ log_file = {tmp_path}/test_tv.log
     return str(config_file)
 
 
+STUB_EDITOR_SCRIPT = """#!{python}
+import json
+import os
+import sys
+
+with open({log!r}, "a") as log:
+    log.write(json.dumps(sys.argv[1:]) + "\\n")
+text = os.environ.get("STUB_EDITOR_APPEND")
+if text:
+    with open(sys.argv[-1], "a") as note:
+        note.write(text)
+sys.exit(int(os.environ.get("STUB_EDITOR_EXIT", "0")))
+"""
+
+
+@dataclass
+class StubEditor:
+    """A real executable standing in for $EDITOR.
+
+    Each run appends its argv (without the program name) as a JSON line to
+    `log`. Environment: STUB_EDITOR_EXIT sets its exit status,
+    STUB_EDITOR_APPEND is appended to the file named by its last argument.
+    """
+
+    command: str
+    log: Path
+
+    def calls(self) -> list[list[str]]:
+        if not self.log.exists():
+            return []
+        return [json.loads(line) for line in self.log.read_text().splitlines()]
+
+
+def _make_stub_editor(directory: Path) -> StubEditor:
+    directory.mkdir(parents=True, exist_ok=True)
+    script = directory / "stub-editor"
+    log = directory / "editor-calls.jsonl"
+    script.write_text(STUB_EDITOR_SCRIPT.format(python=sys.executable, log=str(log)))
+    script.chmod(0o755)
+    return StubEditor(command=shlex.quote(str(script)), log=log)
+
+
 @pytest.fixture
-def mock_editor(tmp_path, monkeypatch):
-    """Create a mock editor script that just touches a file."""
-    editor_script = tmp_path / "mock_editor.sh"
-    editor_script.write_text(
-        """#!/bin/bash
-# Mock editor that just creates/touches the file
-touch "$1"
-echo "Mock editor called with: $1" >> {}
-""".format(tmp_path / "editor_log.txt")
-    )
-    editor_script.chmod(0o755)
+def stub_editor(tmp_path):
+    """A StubEditor whose script lives in tmp_path/editor."""
+    return _make_stub_editor(tmp_path / "editor")
 
-    # Set it as the default editor
-    monkeypatch.setenv("EDITOR", str(editor_script))
 
-    return str(editor_script)
+@pytest.fixture
+def make_stub_editor():
+    """Factory: StubEditor with its script in the given directory."""
+    return _make_stub_editor
+
+
+@pytest.fixture
+def write_notes():
+    """The helper `write_notes(notes_dir, {relpath: content})`; later notes are newer."""
+    return _write_notes
 
 
 @pytest.fixture
@@ -146,3 +194,35 @@ def _wait_until(predicate: Callable[[], bool], timeout: float = 5, interval: flo
 def wait_until():
     """The polling helper `wait_until(predicate, timeout=5)`."""
     return _wait_until
+
+
+@pytest.fixture
+def notes_dir(temp_notes_dir):
+    """`temp_notes_dir` as a Path."""
+    return Path(temp_notes_dir)
+
+
+@pytest.fixture
+def make_frame(notes_dir, stub_editor, write_notes):
+    """Factory: a MainFrame attached to a headless MainLoop, closed at teardown.
+
+    `notes` ({relpath: content}) are written first, later ones newer.
+    """
+    frames = []
+
+    def make(notes=None, editor=None, extension=".txt", extensions=(".txt", ".md")):
+        write_notes(notes_dir, notes or {})
+        frame = urwid_ui.MainFrame(
+            str(notes_dir),
+            stub_editor.command if editor is None else editor,
+            extension,
+            list(extensions),
+        )
+        frames.append(frame)
+        loop = urwid.MainLoop(frame, urwid_ui.palette, screen=RecordingScreen(), handle_mouse=False)
+        frame.attach(loop)
+        return frame
+
+    yield make
+    for frame in frames:
+        frame.close()

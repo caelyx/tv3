@@ -1,6 +1,8 @@
 """A console user interface for Terminal Velocity."""
 
+import contextlib
 import logging
+import os
 import shlex
 import subprocess
 
@@ -20,66 +22,20 @@ palette = [
 ]
 
 
-def system(cmd, loop):
-    """Execute a system command in a subshell and return the exit status.
-
-    Args:
-        cmd: Command string to execute (will be safely split with shlex).
-        loop: The urwid MainLoop instance.
-
-    Returns:
-        Return code from the subprocess.
-
-    Raises:
-        Exception: If the command execution fails.
-    """
-    safe_cmd = shlex.split(cmd)
-    logger.debug(f"System command: {safe_cmd}")
-    try:
-        returncode = subprocess.check_call(safe_cmd)
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Command failed with return code {e.returncode}: {safe_cmd}")
-        raise
-    except FileNotFoundError:
-        logger.error(f"Command not found: {safe_cmd[0]}")
-        raise
-    except Exception as e:
-        logger.exception(f"Unexpected error executing command: {e}")
-        raise
-    finally:
-        # Clear and refresh the screen after command execution
-        loop.screen.clear()
-    return returncode
-
-
 def placeholder_text(text):
-    """Return a placeholder text widget with the given text.
-
-    Args:
-        text: The placeholder text to display.
-
-    Returns:
-        A urwid Filler widget containing the centered placeholder text.
-    """
+    """Return a widget showing `text` centred in the placeholder style."""
     text_widget = urwid.Text(("placeholder", text), align="center")
-    filler_widget = urwid.Filler(text_widget)
-    return filler_widget
+    return urwid.Filler(text_widget)
 
 
 class NoteWidget(urwid.Text):
     """Widget for displaying a note in the list."""
 
     def __init__(self, note):
-        """Initialize a NoteWidget.
-
-        Args:
-            note: The PlainTextNote object to display.
-        """
         self.note = note
         super().__init__(note.title)
 
     def selectable(self):
-        """Mark this widget as selectable."""
         return True
 
     def keypress(self, size, key):
@@ -87,37 +43,25 @@ class NoteWidget(urwid.Text):
         return key
 
     def render(self, size, focus=False):
-        """Render the widget applying focused and unfocused display attrs.
-
-        Args:
-            size: Widget size tuple.
-            focus: Whether this widget has focus.
-
-        Returns:
-            Canvas with appropriate styling applied.
-        """
+        """Render the title in the focused or unfocused note style."""
         attr_map = {None: "notewidget focused" if focus else "notewidget unfocused"}
-        canv = super().render(size, focus=focus)
-        canv = urwid.CompositeCanvas(canv)
+        canv = urwid.CompositeCanvas(super().render(size, focus=focus))
         canv.fill_attr_apply(attr_map)
         return canv
 
 
 class AutocompleteWidget(urwid.Edit):
-    """A text editing widget with autocomplete support."""
+    """A text editing widget that can show a completion of the typed text."""
 
     def __init__(self, *args, **kwargs):
-        """Initialize an AutocompleteWidget."""
         self.fake_focus = True
         self._autocomplete_text = None
         super().__init__(*args, **kwargs)
 
     def get_autocomplete_text(self):
-        """Get the current autocomplete text."""
         return self._autocomplete_text
 
     def set_autocomplete_text(self, text):
-        """Set the autocomplete text and invalidate the widget."""
         self._autocomplete_text = text
         self._invalidate()
 
@@ -128,19 +72,18 @@ class AutocompleteWidget(urwid.Edit):
         return super().render(size, self.fake_focus)
 
     def get_text(self):
-        """Get the text and attributes for display.
+        """Return the text and attributes to display.
 
-        Returns:
-            Tuple of (text, attributes) for rendering.
+        A completion that extends the typed text is shown after it; any
+        other completion replaces it.
         """
         if not self.edit_text and not self.autocomplete_text:
             placeholder = "Find or Create"
             return (placeholder, [("placeholder", len(placeholder))])
         if not self.autocomplete_text:
             return super().get_text()
-        is_substring = self.autocomplete_text.lower().startswith(self.edit_text.lower())
-        if self.edit_text and is_substring:
-            # Show the autocomplete text with its original case
+        is_prefix = self.autocomplete_text.lower().startswith(self.edit_text.lower())
+        if self.edit_text and is_prefix:
             text_to_show = self.autocomplete_text
             attrs = [
                 ("search", len(self.edit_text)),
@@ -153,17 +96,18 @@ class AutocompleteWidget(urwid.Edit):
         )
 
     def consume(self):
-        """Consume the autocomplete text, turning it into typed text.
+        """Turn the completion into typed text, with the cursor at the end.
 
         Returns:
-            True if autocomplete was consumed, False otherwise.
+            True if there was a completion that differed from the typed text.
         """
-        if self.autocomplete_text and len(self.edit_text) < len(self.autocomplete_text):
-            self.set_edit_text(self.autocomplete_text)
-            self.move_cursor_to_coords((1,), len(self.autocomplete_text), 0)
-            self.autocomplete_text = None
-            return True
-        return False
+        text = self.autocomplete_text
+        if text is None or text == self.edit_text:
+            return False
+        self.set_edit_text(text)
+        self.set_edit_pos(len(text))
+        self.autocomplete_text = None
+        return True
 
 
 class NoteFilterListBox(urwid.ListBox):
@@ -173,7 +117,8 @@ class NoteFilterListBox(urwid.ListBox):
         """Initialise a new NoteFilterListBox.
 
         Args:
-            on_changed: Optional callback function called when selection changes.
+            on_changed: Optional callback, called with the focused note after
+                a keypress or mouse event.
         """
         self._fake_focus = False
         self.list_walker = urwid.SimpleFocusListWalker([])
@@ -182,70 +127,60 @@ class NoteFilterListBox(urwid.ListBox):
         self.on_changed = on_changed
 
     def get_selected_note(self):
-        """Get the currently selected note."""
-        if self.focus:
+        """The note in focus, or None if the list is empty."""
+        if self.focus is not None:
             return self.focus.note
         return None
 
     selected_note = property(get_selected_note)
 
     def get_fake_focus(self):
-        """Get the fake focus state."""
         return self._fake_focus
 
     def set_fake_focus(self, value):
-        """Set the fake focus state and invalidate."""
         self._fake_focus = value
         self._invalidate()
 
     fake_focus = property(get_fake_focus, set_fake_focus)
 
     def render(self, size, focus=False):
-        """Render the list box or a placeholder if empty."""
+        """Render the list, highlighting the focus only when `fake_focus` is set."""
         if len(self.list_walker) == 0:
             placeholder = placeholder_text("No matching notes, press Enter to create a new note")
             return placeholder.render(size)
         return super().render(size, self.fake_focus)
 
     def filter(self, matching_notes):
-        """Filter this listbox to show only widgets for matching notes.
-
-        Args:
-            matching_notes: List of PlainTextNote objects to display.
-        """
+        """Show widgets for `matching_notes`, in order, focusing the first."""
         matching_widgets = []
         for note in matching_notes:
-            widget = self.widgets.get(note.abspath)
-            if widget:
-                matching_widgets.append(widget)
-            else:
+            widget = self.widgets.get(note)
+            if widget is None:
                 widget = NoteWidget(note)
-                self.widgets[note.abspath] = widget
-                matching_widgets.append(widget)
-        del self.list_walker[:]
-        for widget in matching_widgets:
-            self.list_walker.append(widget)
+                self.widgets[note] = widget
+            matching_widgets.append(widget)
+        self.list_walker[:] = matching_widgets
+        if matching_widgets:
+            self.focus_position = 0
+
+    def prune(self, notes):
+        """Drop cached widgets for notes not in `notes`."""
+        self.widgets = {note: w for note, w in self.widgets.items() if note in notes}
 
     def focus_note(self, note):
-        """Focus the widget for the given note.
-
-        Args:
-            note: The PlainTextNote to focus.
-        """
-        for widget in self.list_walker:
+        """Focus the widget for `note`, if it is in the list."""
+        for position, widget in enumerate(self.list_walker):
             if widget.note == note:
-                self.list_walker.set_focus(self.list_walker.index(widget))
+                self.focus_position = position
                 break
 
     def keypress(self, size, key):
-        """Handle keypress and notify callback of changes."""
         result = super().keypress(size, key)
         if self.on_changed and self.selected_note:
             self.on_changed(self.selected_note)
         return result
 
     def mouse_event(self, size, event, button, col, row, focus):
-        """Handle mouse events and notify callback of changes."""
         result = super().mouse_event(size, event, button, col, row, focus)
         if self.on_changed and self.selected_note:
             self.on_changed(self.selected_note)
@@ -253,7 +188,12 @@ class NoteFilterListBox(urwid.ListBox):
 
 
 class MainFrame(urwid.Frame):
-    """The topmost urwid widget."""
+    """The topmost urwid widget.
+
+    The selected note is the list's focused note while the list has fake
+    focus; the search box's completion always shows its title. A footer
+    shows a message until the next keypress.
+    """
 
     def __init__(
         self,
@@ -267,7 +207,8 @@ class MainFrame(urwid.Frame):
 
         Args:
             notes_dir: Path to the notes directory.
-            editor: Editor command to use.
+            editor: Editor command line, split like a shell would split it;
+                the note's path is appended as the last argument.
             extension: Default extension for new notes.
             extensions: List of extensions to recognize.
             exclude: Optional list of directories to exclude.
@@ -279,176 +220,204 @@ class MainFrame(urwid.Frame):
             extensions,
             exclude=exclude,
         )
-        self.suppress_filter = False
-        self.suppress_focus = False
-        self._selected_note = None
+        self.loop = None
+        self._wake_fd = None
         self.search_box = AutocompleteWidget(wrap="clip")
         self.list_box = NoteFilterListBox(on_changed=self.on_list_box_changed)
-        urwid.connect_signal(
-            self.search_box,
-            "change",
-            self.on_search_box_changed,
+        self._list_body = urwid.Padding(self.list_box, left=1, right=1)
+        self._empty_body = placeholder_text(
+            "You have no notes yet, to create a note type a note title then press Enter"
         )
         super().__init__(
             header=urwid.LineBox(self.search_box),
-            body=None,
+            body=self._empty_body,
             focus_part="body",
         )
         self.filter(self.search_box.edit_text)
 
-    def get_selected_note(self):
-        """Get the currently selected note."""
-        return self._selected_note
+    def attach(self, loop):
+        """Run inside `loop`: refresh from notebook changes and use its screen."""
+        self.loop = loop
+        self._wake_fd = loop.watch_pipe(self._on_notebook_changed)
+        os.set_blocking(self._wake_fd, False)
+        self.tv_notebook.on_change = self._wake
 
-    def set_selected_note(self, note):
-        """Select the given note.
+    def close(self):
+        """Stop the file watcher and release the main loop pipe."""
+        self.tv_notebook.on_change = None
+        self.tv_notebook.close()
+        if self._wake_fd is not None:
+            self.loop.remove_watch_pipe(self._wake_fd)
+            os.close(self._wake_fd)
+            self._wake_fd = None
 
-        Args:
-            note: The PlainTextNote to select, or None to clear selection.
-        """
-        if self.suppress_focus:
-            return
-        if note:
-            self.search_box.autocomplete_text = note.title
-            self.list_box.fake_focus = True
+    def _wake(self):
+        """Wake the main loop. Called on the watcher thread, so touches no widgets."""
+        # A full pipe already holds a pending wake-up.
+        with contextlib.suppress(BlockingIOError):
+            os.write(self._wake_fd, b"\0")
+
+    def _on_notebook_changed(self, _data):
+        selected = self.selected_note
+        self.list_box.prune(set(self.tv_notebook))
+        self.filter(self.search_box.edit_text, keep=selected, autoselect=selected is not None)
+        return True
+
+    @property
+    def selected_note(self):
+        """The selected note, or None."""
+        if self.list_box.fake_focus:
+            return self.list_box.selected_note
+        return None
+
+    def select(self, note):
+        """Select `note` (which must be in the list), or clear the selection."""
+        if note is not None:
             self.list_box.focus_note(note)
-        else:
-            self.search_box.autocomplete_text = None
-            self.list_box.fake_focus = False
-        self._selected_note = note
+        self.list_box.fake_focus = note is not None
+        selected = self.selected_note
+        self.search_box.autocomplete_text = selected.title if selected else None
 
-    selected_note = property(get_selected_note, set_selected_note)
+    def show_message(self, text):
+        """Show `text` in the status line until the next keypress."""
+        self.footer = urwid.Text(text)
 
     def quit(self):
-        """Quit the app and clean up resources."""
-        # Clean up the notebook (stop file watcher)
-        if hasattr(self, "tv_notebook"):
-            self.tv_notebook.close()
         raise urwid.ExitMainLoop()
 
     def keypress(self, size, key):
         """Handle keypress events.
 
-        Args:
-            size: Widget size tuple.
-            key: Key string.
-
         Returns:
             Key if not handled, None if handled.
         """
-        maxcol, _maxrow = size
-        self.suppress_filter = False
-        self.suppress_focus = False
+        self.footer = None
+        selected = self.selected_note
         if key in ["esc", "ctrl d", "ctrl u"]:
-            if self.selected_note:
-                self.selected_note = None
-                return None
-            if self.search_box.edit_text:
-                self.search_box.set_edit_text("")
-                return None
-            self.quit()
+            if selected is not None:
+                self.select(None)
+            elif self.search_box.edit_text:
+                self.set_search_text("")
+            else:
+                self.quit()
         elif key in ["ctrl q", "ctrl x"]:
             self.quit()
         elif key == "enter":
-            if self.selected_note:
-                note_path = shlex.quote(self.selected_note.abspath)
-                system(f"{self.editor} {note_path}", self.loop)
-            elif self.search_box.edit_text:
-                try:
-                    note = self.tv_notebook.add_new(
-                        self.search_box.edit_text + self.tv_notebook.extension
-                    )
-                    if note is not None:
-                        note_path = shlex.quote(note.abspath)
-                        system(f"{self.editor} {note_path}", self.loop)
-                except tv_notebook.NoteAlreadyExistsError:
-                    # Note exists, open it anyway
-                    note_path = self.search_box.edit_text + self.tv_notebook.extension
-                    note_path = shlex.quote(note_path)
-                    system(f"{self.editor} {note_path}", self.loop)
-                except tv_notebook.InvalidNoteTitleError:
-                    # Invalid title, skip silently
-                    pass
-            self.suppress_focus = True
-            self.filter(self.search_box.edit_text)
-            return None
-        elif self.selected_note and key in ["tab", "left", "right"]:
+            self.open_or_create()
+        elif selected is not None and key in ["tab", "left", "right"]:
             if self.search_box.consume():
-                return None
-            return self.search_box.keypress((maxcol,), key)
-        elif key == "down":
-            if not self.list_box.fake_focus:
-                self.list_box.fake_focus = True
-                if self.list_box.selected_note:
-                    self.on_list_box_changed(self.list_box.selected_note)
-                return None
-            return self.list_box.keypress(size, key)
-        elif key in ["up", "page up", "page down"]:
-            return self.list_box.keypress(size, key)
-        elif key == "backspace":
-            consume = False
-            if self.selected_note:
-                if self.search_box.edit_text == "":
-                    consume = True
-                else:
-                    title = self.selected_note.title.lower()
-                    typed = self.search_box.edit_text.lower()
-                    if not title.startswith(typed):
-                        consume = True
-            if consume:
-                self.search_box.consume()
+                self.filter(self.search_box.edit_text, keep=selected)
             else:
-                self.selected_note = None
-            self.suppress_focus = True
-            return self.search_box.keypress((maxcol,), key)
+                return self._edit_search(size, key)
+        elif key == "down" and not self.list_box.fake_focus:
+            self.select(self.list_box.selected_note)
+        elif key in ["down", "up", "page up", "page down"]:
+            return super().keypress(size, key)
+        elif key == "backspace":
+            return self._backspace(size, selected)
         else:
-            return self.search_box.keypress((maxcol,), key)
-
-        # If not handled above, explicitly return None
+            return self._edit_search(size, key)
         return None
 
-    def filter(self, query):
-        """Do the synchronised list box filter and search box autocomplete.
+    def _edit_search(self, size, key, autoselect=True):
+        """Pass `key` to the search box and refilter if its text changed."""
+        before = self.search_box.edit_text
+        result = self.header.keypress((size[0],), key)
+        if self.search_box.edit_text != before:
+            self.filter(self.search_box.edit_text, autoselect=autoselect)
+        return result
 
-        Args:
-            query: Search query string.
+    def _backspace(self, size, selected):
+        """Remove a completion if one is showing, else delete a character.
+
+        Deleting never autoselects a note. With a note selected whose title
+        does not complete the typed text, the title is edited instead.
         """
-        if self.suppress_filter:
+        if selected is not None:
+            typed = self.search_box.edit_text
+            title = selected.title
+            if title.lower().startswith(typed.lower()) and len(title) > len(typed):
+                self.select(None)
+                return None
+            if title != typed:
+                self.search_box.consume()
+        return self._edit_search(size, "backspace", autoselect=False)
+
+    def set_search_text(self, text):
+        """Replace the search text, with the cursor at the end, and refilter."""
+        self.search_box.set_edit_text(text)
+        self.search_box.set_edit_pos(len(text))
+        self.filter(text)
+
+    def open_or_create(self):
+        """Open the selected note, or create and open a note titled as typed."""
+        note = self.selected_note
+        if note is None:
+            title = self.search_box.edit_text
+            if not title:
+                return
+            try:
+                note = self.tv_notebook.create(title)
+            except tv_notebook.NoteAlreadyExistsError as e:
+                note = e.note
+            except tv_notebook.NewNoteError as e:
+                self.show_message(str(e))
+                return
+        self.edit(note)
+        self.filter(self.search_box.edit_text, keep=note)
+
+    def edit(self, note):
+        """Run the editor on `note`, handing it the terminal while it runs."""
+        try:
+            command = [*shlex.split(self.editor), note.abspath]
+        except ValueError as e:
+            self.show_message(f"Could not run editor {self.editor}: {e}")
             return
-        if len(self.tv_notebook) == 0:
-            self.body = placeholder_text(
-                "You have no notes yet, to create a note type a note title then press Enter"
-            )
-        else:
-            self.body = urwid.Padding(self.list_box, left=1, right=1)
+        logger.debug(f"Running editor: {command}")
+        screen = self.loop.screen
+        screen.stop()
+        try:
+            returncode = subprocess.call(command)
+        except OSError as e:
+            logger.error(f"Could not run editor {command}: {e}")
+            self.show_message(f"Could not run editor {self.editor}: {e.strerror or e}")
+            return
+        finally:
+            screen.start()
+        if returncode != 0:
+            logger.error(f"Editor exited with status {returncode}: {command}")
+            self.show_message(f"Editor exited with status {returncode}")
+
+    def filter(self, query, keep=None, autoselect=True):
+        """Show the notes matching `query`, newest first, and update the selection.
+
+        `keep` stays selected if it still matches. Otherwise, if `autoselect`,
+        the newest note whose title starts with `query` is selected.
+        """
+        self.body = self._list_body if len(self.tv_notebook) else self._empty_body
         matching_notes = self.tv_notebook.search(query)
         matching_notes.sort(key=lambda x: x.mtime, reverse=True)
         self.list_box.filter(matching_notes)
-        autocompletable_matches = []
-        if query:
-            for note in matching_notes:
-                if note.title.lower().startswith(query.lower()):
-                    autocompletable_matches.append(note)
-        if autocompletable_matches:
-            self.selected_note = autocompletable_matches[0]
+        if keep is not None and keep in matching_notes:
+            self.select(keep)
+        elif autoselect and query:
+            prefix = query.lower()
+            self.select(
+                next((n for n in matching_notes if n.title.lower().startswith(prefix)), None)
+            )
         else:
-            self.selected_note = None
-
-    def on_search_box_changed(self, edit, new_edit_text):
-        """Handle search box text changes."""
-        self.filter(new_edit_text)
+            self.select(None)
 
     def on_list_box_changed(self, note):
-        """Handle list box selection changes."""
-        self.selected_note = note
+        self.select(note)
 
 
 def launch(notes_dir, editor, extension, extensions, exclude=None):
-    """Launch the user interface.
+    """Run the user interface until the user quits.
 
     Args:
         notes_dir: Path to the notes directory.
-        editor: Editor command to use.
+        editor: Editor command line.
         extension: Default extension for new notes.
         extensions: List of extensions to recognize.
         exclude: Optional list of directories to exclude.
@@ -460,10 +429,9 @@ def launch(notes_dir, editor, extension, extensions, exclude=None):
         extensions,
         exclude=exclude,
     )
-    frame.loop = urwid.MainLoop(frame, palette)
     try:
-        frame.loop.run()
+        loop = urwid.MainLoop(frame, palette)
+        frame.attach(loop)
+        loop.run()
     finally:
-        # Ensure cleanup happens even if loop exits unexpectedly
-        if hasattr(frame, "tv_notebook"):
-            frame.tv_notebook.close()
+        frame.close()
