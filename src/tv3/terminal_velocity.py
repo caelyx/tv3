@@ -12,7 +12,7 @@ from . import urwid_ui
 
 # Configuration constants
 DEFAULT_EDITOR = "pico"
-DEFAULT_EXTENSION = "txt"
+DEFAULT_EXTENSION = ".txt"
 DEFAULT_EXTENSIONS = ".txt, .md, .markdown, .rst"
 DEFAULT_NOTES_DIR = "~/Notes"
 DEFAULT_EXCLUDE_DIRS = "src, backup, ignore, tmp, old"
@@ -21,34 +21,80 @@ DEFAULT_CONFIG_FILE = "~/.tvrc"
 
 # Logging constants
 LOG_MAX_BYTES = 1_000_000  # 1 megabyte
-LOG_BACKUP_COUNT = 0
+LOG_BACKUP_COUNT = 1
+
+
+def expand_path(path):
+    """Return an absolute path with ``~`` and environment variables expanded."""
+    return os.path.abspath(os.path.expandvars(os.path.expanduser(path)))
+
+
+def read_config(parser, config_file, explicit):
+    """Read the [DEFAULT] section of the config file into a dict of typed values.
+
+    A missing config file is an error only if it was given explicitly.
+    Errors are reported through ``parser.error``, which exits.
+    """
+    config = configparser.ConfigParser(interpolation=None)
+    if not os.path.exists(config_file):
+        if explicit:
+            parser.error(f"config file not found: {config_file}")
+        return {}
+    try:
+        config.read(config_file)
+    except configparser.Error as e:
+        parser.error(f"could not parse config file {config_file}: {e}")
+
+    defaults = dict(config.defaults())
+    if "debug" in defaults:
+        try:
+            defaults["debug"] = config.getboolean(configparser.DEFAULTSECT, "debug")
+        except ValueError:
+            parser.error(
+                f"invalid value for 'debug' in {config_file}: {defaults['debug']!r} "
+                "(expected true/false, yes/no, on/off or 1/0)"
+            )
+    return defaults
+
+
+def setup_logging(log_file, debug):
+    """Send all log records to a rotating log file, and nowhere else.
+
+    The handler is attached to the root logger so that records from
+    libraries are captured too; without a handler anywhere in the hierarchy
+    logging would fall back to writing on stderr, over the terminal UI.
+    """
+    root = logging.getLogger()
+    logging.getLogger("tv3").setLevel(logging.DEBUG if debug else logging.WARNING)
+    try:
+        handler = logging.handlers.RotatingFileHandler(
+            log_file,
+            maxBytes=LOG_MAX_BYTES,
+            backupCount=LOG_BACKUP_COUNT,
+        )
+    except OSError as e:
+        print(f"Warning: Could not create log file {log_file}: {e}", file=sys.stderr)
+        root.addHandler(logging.NullHandler())
+        return
+    root.addHandler(handler)
 
 
 def main():
     """Main entry point for Terminal Velocity."""
     # First pass: get config file location
-    parser = argparse.ArgumentParser(add_help=False)
+    parser = argparse.ArgumentParser(prog="tv3", add_help=False)
     parser.add_argument(
         "-c",
         "--config",
         action="store",
-        default=DEFAULT_CONFIG_FILE,
+        default=None,
         dest="config",
         help=f"the config file to use (default: {DEFAULT_CONFIG_FILE})",
     )
     (args, _) = parser.parse_known_args()
-    config_file = os.path.abspath(os.path.expanduser(args.config))
-
-    # Read config file
-    config = configparser.ConfigParser()
-    try:
-        config.read(config_file)
-        defaults = dict(config.items("DEFAULT"))
-    except (configparser.Error, KeyError) as e:
-        # Config file doesn't exist or is invalid - use empty defaults
-        defaults = {}
-        if os.path.exists(config_file):
-            print(f"Warning: Could not parse config file {config_file}: {e}", file=sys.stderr)
+    explicit_config = args.config is not None
+    config_file = expand_path(args.config if explicit_config else DEFAULT_CONFIG_FILE)
+    defaults = read_config(parser, config_file, explicit_config)
 
     description = __doc__
     epilog = (
@@ -63,12 +109,13 @@ def main():
         f"    extensions = {DEFAULT_EXTENSIONS}\n"
         f"    notes_dir = {DEFAULT_NOTES_DIR}\n"
         "\n"
-        "if there is no config file (or an argument is missing from the)\n"
-        "config file the default default will be used\n"
+        "if there is no config file (or an argument is missing from the\n"
+        "config file) the default will be used\n"
     )
 
     # Second pass: full argument parsing with config defaults
     parser = argparse.ArgumentParser(
+        prog="tv3",
         description=description,
         epilog=epilog,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -80,7 +127,10 @@ def main():
         action="store",
         default=defaults.get("editor", os.getenv("EDITOR", DEFAULT_EDITOR)),
         dest="editor",
-        help=f"the text editor to use (default: $EDITOR or {DEFAULT_EDITOR})",
+        help=(
+            "the text editor to use; precedence: command line > config file > "
+            f"$EDITOR > {DEFAULT_EDITOR}"
+        ),
     )
     parser.add_argument(
         "-x",
@@ -145,41 +195,20 @@ def main():
 
     args = parser.parse_args()
 
-    # Parse extension and exclude lists
+    args.config = config_file
+    args.notes_dir = expand_path(args.notes_dir)
+    args.log_file = expand_path(args.log_file)
     args.extensions = [ext.strip() for ext in args.extensions.split(",")]
     args.exclude = [name.strip() for name in args.exclude.split(",")]
-
-    # Set up logging before print_config so log file is created
-    logger = logging.getLogger("tv3")
-    logger.setLevel(logging.DEBUG)
-
-    try:
-        log_file_path = os.path.abspath(os.path.expanduser(args.log_file))
-        fh = logging.handlers.RotatingFileHandler(
-            log_file_path,
-            maxBytes=LOG_MAX_BYTES,
-            backupCount=LOG_BACKUP_COUNT,
-        )
-        if args.debug:
-            fh.setLevel(logging.DEBUG)
-        else:
-            fh.setLevel(logging.WARNING)
-        logger.addHandler(fh)
-    except OSError as e:
-        print(f"Warning: Could not create log file {args.log_file}: {e}", file=sys.stderr)
-
-    # Stream handler for critical errors only
-    sh = logging.StreamHandler(sys.stdout)
-    sh.setLevel(logging.CRITICAL)
-    logger.addHandler(sh)
-
-    logger.debug(f"Starting Terminal Velocity with args: {args}")
 
     if args.print_config:
         print(args)
         sys.exit(0)
 
-    # Launch the UI with proper error handling
+    setup_logging(args.log_file, args.debug)
+    logger = logging.getLogger("tv3")
+    logger.debug(f"Starting Terminal Velocity with args: {args}")
+
     try:
         urwid_ui.launch(
             notes_dir=args.notes_dir,
