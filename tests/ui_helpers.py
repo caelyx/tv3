@@ -17,6 +17,7 @@ class RecordingScreen(urwid.BaseScreen):
 
     `events` records "stop"/"start" calls, each paired with `probe()` at
     the time of the call; `lines` holds the text of the last drawn canvas.
+    Setting `start_error` makes `start()` raise it.
     """
 
     def __init__(self, size=SIZE):
@@ -25,9 +26,12 @@ class RecordingScreen(urwid.BaseScreen):
         self.events = []
         self.probe = lambda: None
         self.lines = []
+        self.start_error = None
 
     def start(self, *args, **kwargs):
         self.events.append(("start", self.probe()))
+        if self.start_error is not None:
+            raise self.start_error
         return super().start(*args, **kwargs)
 
     def stop(self):
@@ -47,9 +51,51 @@ class RecordingScreen(urwid.BaseScreen):
         self.lines = [row.decode() for row in canvas.text]
 
 
+class ScriptedScreen(RecordingScreen):
+    """A RecordingScreen that plays `script` into the main loop it is run by.
+
+    Each step is a key, or a callable that is retried until it returns
+    true. A step taking longer than `timeout` seconds raises TimeoutError.
+    """
+
+    def __init__(self, script, size=SIZE, timeout=5.0, interval=0.01):
+        super().__init__(size)
+        self.script = list(script)
+        self.timeout = timeout
+        self.interval = interval
+        self._hooked = False
+
+    def hook_event_loop(self, event_loop, callback):
+        if self._hooked:
+            return
+        self._hooked = True
+        deadline = time.monotonic() + self.timeout
+
+        def step():
+            nonlocal deadline
+            item = self.script[0]
+            if not callable(item):
+                self.script.pop(0)
+                callback([item], [])
+            elif item():
+                self.script.pop(0)
+            elif time.monotonic() > deadline:
+                raise TimeoutError(f"script step {item!r} not done within {self.timeout}s")
+            else:
+                event_loop.alarm(self.interval, step)
+                return
+            deadline = time.monotonic() + self.timeout
+            if self.script:
+                event_loop.alarm(self.interval, step)
+
+        event_loop.alarm(0, step)
+
+
 def press(frame, *keys):
+    """Send `keys` one at a time, rendering after each as the main loop does."""
     for key in keys:
         frame.keypress(SIZE, key)
+        frame.render(SIZE, focus=True)
 
 
 def type_text(frame, text):
@@ -88,11 +134,10 @@ def highlighted(frame):
 
 
 def status_line(frame):
-    """The status message, with any wrapped rows rejoined."""
+    """The status message on the bottom row."""
     if frame.footer is None:
         return ""
-    footer_rows = frame.footer.rows((SIZE[0],))
-    return " ".join(line.strip() for line in screen_lines(frame)[-footer_rows:])
+    return screen_lines(frame)[-1].strip()
 
 
 def run_headless(loop, until, timeout=5.0, interval=0.01):

@@ -4,9 +4,16 @@ import contextlib
 import logging
 import os
 import shlex
+import signal
 import subprocess
+import sys
+import termios
+import threading
 
 import urwid
+import urwid.display.raw
+from urwid import text_layout
+from urwid.canvas import apply_text_layout
 
 from . import tv_notebook
 
@@ -19,7 +26,10 @@ palette = [
     ("notewidget unfocused", "default", "default"),
     ("placeholder", "dark blue", "default"),
     ("search", "default", "default"),
+    ("status", "white", "dark red"),
 ]
+
+EDIT_KEYS = ("backspace", "delete", "home", "end")
 
 
 def placeholder_text(text):
@@ -51,12 +61,18 @@ class NoteWidget(urwid.Text):
 
 
 class AutocompleteWidget(urwid.Edit):
-    """A text editing widget that can show a completion of the typed text."""
+    """A one-line text editing widget that can show a completion of the typed text.
+
+    The widget draws its own display: the typed text, a completion over it,
+    or a placeholder. Edit's text, cursor and layout only ever describe the
+    typed text. The cursor is always shown.
+    """
+
+    placeholder = "Find or Create"
 
     def __init__(self, *args, **kwargs):
-        self.fake_focus = True
         self._autocomplete_text = None
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, wrap=urwid.CLIP, **kwargs)
 
     def get_autocomplete_text(self):
         return self._autocomplete_text
@@ -67,33 +83,49 @@ class AutocompleteWidget(urwid.Edit):
 
     autocomplete_text = property(get_autocomplete_text, set_autocomplete_text)
 
-    def render(self, size, focus=False):
-        """Render with fake focus to always show cursor."""
-        return super().render(size, self.fake_focus)
-
-    def get_text(self):
-        """Return the text and attributes to display.
-
-        A completion that extends the typed text is shown after it; any
-        other completion replaces it.
-        """
-        if not self.edit_text and not self.autocomplete_text:
-            placeholder = "Find or Create"
-            return (placeholder, [("placeholder", len(placeholder))])
-        if not self.autocomplete_text:
-            return super().get_text()
-        is_prefix = self.autocomplete_text.lower().startswith(self.edit_text.lower())
-        if self.edit_text and is_prefix:
-            text_to_show = self.autocomplete_text
-            attrs = [
-                ("search", len(self.edit_text)),
-                ("autocomplete", len(text_to_show) - len(self.edit_text)),
-            ]
-            return (text_to_show, attrs)
+    def completion_extends_text(self):
+        """Whether the completion continues the non-empty typed text, ignoring case."""
+        typed = self.edit_text
+        completion = self.autocomplete_text
         return (
-            self.autocomplete_text,
-            [("autocomplete", len(self.autocomplete_text))],
+            bool(typed)
+            and completion is not None
+            and completion[: len(typed)].lower() == typed.lower()
         )
+
+    def _display(self):
+        """The markup to draw, and the cursor's index into its text.
+
+        A completion that extends the typed text is shown after it, with the
+        cursor at the typed position; any other completion replaces it, with
+        the cursor at its end.
+        """
+        typed = self.edit_text
+        completion = self.autocomplete_text
+        if completion is None:
+            if typed:
+                return typed, self.edit_pos
+            return ("placeholder", self.placeholder), 0
+        if self.completion_extends_text():
+            return [
+                ("search", completion[: len(typed)]),
+                ("autocomplete", completion[len(typed) :]),
+            ], self.edit_pos
+        return ("autocomplete", completion), len(completion)
+
+    def render(self, size, focus=False):
+        """Render the display on one row, scrolled to keep the cursor visible."""
+        (maxcol,) = size
+        markup, cursor = self._display()
+        text, attrs = urwid.decompose_tagmarkup(markup)
+        layout = self.layout.layout(text, maxcol, urwid.LEFT, urwid.CLIP)
+        x, y = text_layout.calc_coords(text, layout, cursor)
+        if x >= maxcol:
+            layout = [text_layout.shift_line(layout[0], maxcol - 1 - x)]
+            x = maxcol - 1
+        canvas = urwid.CompositeCanvas(apply_text_layout(text, attrs, layout, maxcol))
+        canvas.cursor = (x, y)
+        return canvas
 
     def consume(self):
         """Turn the completion into typed text, with the cursor at the end.
@@ -222,8 +254,9 @@ class MainFrame(urwid.Frame):
         )
         self.loop = None
         self._wake_fd = None
-        self.search_box = AutocompleteWidget(wrap="clip")
-        self.list_box = NoteFilterListBox(on_changed=self.on_list_box_changed)
+        self._wake_lock = threading.Lock()
+        self.search_box = AutocompleteWidget()
+        self.list_box = NoteFilterListBox(on_changed=self.select)
         self._list_body = urwid.Padding(self.list_box, left=1, right=1)
         self._empty_body = placeholder_text(
             "You have no notes yet, to create a note type a note title then press Enter"
@@ -246,16 +279,20 @@ class MainFrame(urwid.Frame):
         """Stop the file watcher and release the main loop pipe."""
         self.tv_notebook.on_change = None
         self.tv_notebook.close()
-        if self._wake_fd is not None:
-            self.loop.remove_watch_pipe(self._wake_fd)
-            os.close(self._wake_fd)
-            self._wake_fd = None
+        with self._wake_lock:
+            if self._wake_fd is not None:
+                self.loop.remove_watch_pipe(self._wake_fd)
+                os.close(self._wake_fd)
+                self._wake_fd = None
 
     def _wake(self):
-        """Wake the main loop. Called on the watcher thread, so touches no widgets."""
-        # A full pipe already holds a pending wake-up.
-        with contextlib.suppress(BlockingIOError):
-            os.write(self._wake_fd, b"\0")
+        """Wake the main loop, unless closed. Called on the watcher thread, so touches no widgets."""
+        with self._wake_lock:
+            if self._wake_fd is None:
+                return
+            # A full pipe already holds a pending wake-up.
+            with contextlib.suppress(BlockingIOError):
+                os.write(self._wake_fd, b"\0")
 
     def _on_notebook_changed(self, _data):
         selected = self.selected_note
@@ -271,16 +308,21 @@ class MainFrame(urwid.Frame):
         return None
 
     def select(self, note):
-        """Select `note` (which must be in the list), or clear the selection."""
+        """Select `note` (which must be in the list), or clear the selection.
+
+        Clearing the selection moves the list's focus back to its first row.
+        """
         if note is not None:
             self.list_box.focus_note(note)
+        elif len(self.list_box.list_walker):
+            self.list_box.focus_position = 0
         self.list_box.fake_focus = note is not None
         selected = self.selected_note
         self.search_box.autocomplete_text = selected.title if selected else None
 
     def show_message(self, text):
-        """Show `text` in the status line until the next keypress."""
-        self.footer = urwid.Text(text)
+        """Show `text` in the one-row status line until the next keypress."""
+        self.footer = urwid.Text(("status", text), wrap=urwid.ELLIPSIS)
 
     def quit(self):
         raise urwid.ExitMainLoop()
@@ -314,43 +356,56 @@ class MainFrame(urwid.Frame):
         elif key in ["down", "up", "page up", "page down"]:
             return super().keypress(size, key)
         elif key == "backspace":
-            return self._backspace(size, selected)
+            return self._backspace(size)
         else:
             return self._edit_search(size, key)
         return None
 
     def _edit_search(self, size, key, autoselect=True):
-        """Pass `key` to the search box and refilter if its text changed."""
+        """Pass `key` to the search box and refilter if its text changed.
+
+        When the selected note's title is shown in place of the typed text,
+        an editing key edits the title.
+        """
         before = self.search_box.edit_text
+        if (
+            (self.search_box.valid_char(key) or key in EDIT_KEYS)
+            and self.selected_note is not None
+            and not self.search_box.completion_extends_text()
+        ):
+            self.search_box.consume()
         result = self.header.keypress((size[0],), key)
         if self.search_box.edit_text != before:
             self.filter(self.search_box.edit_text, autoselect=autoselect)
         return result
 
-    def _backspace(self, size, selected):
-        """Remove a completion if one is showing, else delete a character.
+    def _backspace(self, size):
+        """Remove a completion shown after the typed text, else delete a character.
 
-        Deleting never autoselects a note. With a note selected whose title
-        does not complete the typed text, the title is edited instead.
+        Deleting never autoselects a note.
         """
-        if selected is not None:
-            typed = self.search_box.edit_text
-            title = selected.title
-            if title.lower().startswith(typed.lower()) and len(title) > len(typed):
-                self.select(None)
-                return None
-            if title != typed:
-                self.search_box.consume()
+        box = self.search_box
+        if (
+            self.selected_note is not None
+            and box.completion_extends_text()
+            and len(box.autocomplete_text) > len(box.edit_text)
+        ):
+            self.select(None)
+            return None
         return self._edit_search(size, "backspace", autoselect=False)
 
-    def set_search_text(self, text):
+    def set_search_text(self, text, keep=None):
         """Replace the search text, with the cursor at the end, and refilter."""
         self.search_box.set_edit_text(text)
         self.search_box.set_edit_pos(len(text))
-        self.filter(text)
+        self.filter(text, keep=keep)
 
     def open_or_create(self):
-        """Open the selected note, or create and open a note titled as typed."""
+        """Open the selected note, or create and open a note titled as typed.
+
+        Afterwards the note is selected; if it does not match the typed text,
+        the search text becomes its title.
+        """
         note = self.selected_note
         if note is None:
             title = self.search_box.edit_text
@@ -365,6 +420,8 @@ class MainFrame(urwid.Frame):
                 return
         self.edit(note)
         self.filter(self.search_box.edit_text, keep=note)
+        if self.selected_note != note:
+            self.set_search_text(note.title, keep=note)
 
     def edit(self, note):
         """Run the editor on `note`, handing it the terminal while it runs."""
@@ -377,14 +434,23 @@ class MainFrame(urwid.Frame):
         screen = self.loop.screen
         screen.stop()
         try:
-            returncode = subprocess.call(command)
+            returncode = call_with_interrupts_ignored(command)
         except OSError as e:
+            screen.start()
             logger.error(f"Could not run editor {command}: {e}")
             self.show_message(f"Could not run editor {self.editor}: {e.strerror or e}")
             return
-        finally:
-            screen.start()
-        if returncode != 0:
+        except BaseException:
+            try:
+                screen.start()
+            except Exception:
+                logger.exception("Could not restore the screen after the editor failed")
+            raise
+        screen.start()
+        if returncode < 0:
+            logger.error(f"Editor killed by signal {-returncode}: {command}")
+            self.show_message(f"Editor killed by signal {-returncode}")
+        elif returncode > 0:
             logger.error(f"Editor exited with status {returncode}: {command}")
             self.show_message(f"Editor exited with status {returncode}")
 
@@ -408,8 +474,42 @@ class MainFrame(urwid.Frame):
         else:
             self.select(None)
 
-    def on_list_box_changed(self, note):
-        self.select(note)
+
+def call_with_interrupts_ignored(command):
+    """Run `command` and return its exit status, letting Ctrl-C reach only it.
+
+    Ctrl-C sends SIGINT to the terminal's whole foreground process group.
+    While waiting, tv3 handles SIGINT by doing nothing. Unlike ignoring the
+    signal, a handler is not inherited, so the command still receives it.
+    Must be called on the main thread.
+    """
+    previous = signal.signal(signal.SIGINT, lambda _signum, _frame: None)
+    try:
+        return subprocess.call(command)
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+
+class Screen(urwid.display.raw.Screen):
+    """A terminal screen that receives Ctrl-Q and Ctrl-S as keys.
+
+    Terminal flow control (IXON) would otherwise consume them. `start()`
+    turns it off; `stop()` restores the terminal settings saved by
+    `start()`, flow control included.
+    """
+
+    def __init__(self, input=sys.stdin, output=sys.stdout):
+        super().__init__(input, output)
+        self._input = input
+
+    def start(self, *args, **kwargs):
+        context = super().start(*args, **kwargs)
+        fd = self._input.fileno()
+        if os.isatty(fd):
+            attrs = termios.tcgetattr(fd)
+            attrs[0] &= ~termios.IXON
+            termios.tcsetattr(fd, termios.TCSANOW, attrs)
+        return context
 
 
 def launch(notes_dir, editor, extension, extensions, exclude=None):
@@ -430,7 +530,7 @@ def launch(notes_dir, editor, extension, extensions, exclude=None):
         exclude=exclude,
     )
     try:
-        loop = urwid.MainLoop(frame, palette)
+        loop = urwid.MainLoop(frame, palette, screen=Screen())
         frame.attach(loop)
         loop.run()
     finally:

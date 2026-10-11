@@ -1,7 +1,16 @@
 """Integration tests: the notebook, the UI and a real editor working together."""
 
+import fcntl
 import os
+import select
+import shlex
+import signal
+import struct
+import subprocess
+import sys
+import termios
 import threading
+import time
 
 import pytest
 
@@ -173,3 +182,143 @@ class TestErrorRecovery:
         type_text(frame, "oth")
         assert list_lines(frame) == ["other"]
         assert search_line(frame) == "other"
+
+
+class Terminal:
+    """tv3 running under `sh` on a pseudo-terminal.
+
+    The shell turns off IXANY (so a stopped terminal is resumed only by
+    Ctrl-Q, as on Linux), runs tv3, then records tv3's exit status and the
+    terminal settings left behind.
+    """
+
+    def __init__(self, tmp_path, notes_dir, editor):
+        self.status_file = tmp_path / "status"
+        self.stty_after = tmp_path / "stty-after"
+        tv3 = shlex.join([sys.executable, "-m", "tv3", "-e", editor, str(notes_dir)])
+        script = (
+            f"stty -ixany; {tv3}; echo $? > {shlex.quote(str(self.status_file))}; "
+            f"stty -a > {shlex.quote(str(self.stty_after))}"
+        )
+        env = dict(os.environ, HOME=str(tmp_path), TERM="xterm-256color")
+        self.output = b""
+        self.fd, terminal = os.openpty()
+        fcntl.ioctl(terminal, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+        self.process = subprocess.Popen(
+            ["/bin/sh", "-c", script],
+            stdin=terminal,
+            stdout=terminal,
+            stderr=terminal,
+            env=env,
+            start_new_session=True,
+        )
+        os.close(terminal)
+
+    def read(self, timeout):
+        """Read output for up to `timeout` seconds; return what arrived."""
+        received = b""
+        deadline = time.monotonic() + timeout
+        while (remaining := deadline - time.monotonic()) > 0:
+            readable, _, _ = select.select([self.fd], [], [], remaining)
+            if not readable:
+                break
+            try:
+                data = os.read(self.fd, 65536)
+            except OSError:
+                break
+            if not data:
+                break
+            received += data
+        self.output += received
+        return received
+
+    def read_until(self, text, count=1, timeout=10):
+        """Read until `text` has been output `count` times in all; return whether it was."""
+        deadline = time.monotonic() + timeout
+        while self.output.count(text) < count and time.monotonic() < deadline:
+            self.read(0.05)
+        return self.output.count(text) >= count
+
+    def send(self, data):
+        os.write(self.fd, data)
+
+    def wait(self, timeout=10):
+        """Wait for the shell to exit; return tv3's exit status, or None on timeout."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            self.read(0.05)
+            if self.process.poll() is not None:
+                return int(self.status_file.read_text())
+        return None
+
+    def close(self):
+        """Kill anything still running; closing the terminal first releases output it stopped."""
+        if self.process.poll() is None:
+            os.killpg(self.process.pid, signal.SIGKILL)
+        os.close(self.fd)
+        self.process.wait()
+
+
+BOX_CORNER = "┌".encode()
+
+
+def _stty_flags(text):
+    return set(text.split())
+
+
+@pytest.fixture
+def terminal(tmp_path, notes_dir):
+    """Factory: tv3 on a pseudo-terminal with the given editor command."""
+    terminals = []
+
+    def start(editor="true"):
+        term = Terminal(tmp_path, notes_dir, editor)
+        terminals.append(term)
+        assert term.read_until(b"Find or Create"), term.output
+        return term
+
+    yield start
+    for term in terminals:
+        term.close()
+
+
+@pytest.mark.slow
+class TestRealTerminal:
+    def test_ctrl_q_quits(self, terminal):
+        term = terminal()
+        term.send(b"\x11")
+        assert term.wait() == 0
+
+    def test_ctrl_s_does_not_stop_output(self, terminal):
+        term = terminal()
+        term.read(0.2)
+        term.send(b"\x13")
+        term.read(0.2)
+
+        term.send(b"x")
+
+        assert term.read(2)
+        term.send(b"\x18")
+        assert term.wait() == 0
+
+    def test_flow_control_is_on_in_the_editor_and_after_exit(
+        self, terminal, tmp_path, write_notes, notes_dir
+    ):
+        write_notes(notes_dir, {"a.txt": ""})
+        stty_editor = tmp_path / "stty-editor"
+        stty_in_editor = tmp_path / "stty-in-editor"
+        stty_editor.write_text(f"#!/bin/sh\nstty -a > {shlex.quote(str(stty_in_editor))}\n")
+        stty_editor.chmod(0o755)
+        term = terminal(editor=str(stty_editor))
+
+        term.send(b"\x1b[B")
+        term.read(0.3)
+        drawn = term.output.count(BOX_CORNER)
+        term.send(b"\r")
+        assert term.read_until(BOX_CORNER, count=drawn + 1), term.output
+        assert stty_in_editor.exists()
+        term.send(b"\x11")
+
+        assert term.wait() == 0
+        assert {"ixon", "-ixany"} <= _stty_flags(stty_in_editor.read_text())
+        assert {"ixon", "-ixany"} <= _stty_flags(term.stty_after.read_text())

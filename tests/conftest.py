@@ -96,6 +96,9 @@ text = os.environ.get("STUB_EDITOR_APPEND")
 if text:
     with open(sys.argv[-1], "a") as note:
         note.write(text)
+signum = os.environ.get("STUB_EDITOR_SIGNAL")
+if signum:
+    os.kill(os.getpid(), int(signum))
 sys.exit(int(os.environ.get("STUB_EDITOR_EXIT", "0")))
 """
 
@@ -106,7 +109,8 @@ class StubEditor:
 
     Each run appends its argv (without the program name) as a JSON line to
     `log`. Environment: STUB_EDITOR_EXIT sets its exit status,
-    STUB_EDITOR_APPEND is appended to the file named by its last argument.
+    STUB_EDITOR_APPEND is appended to the file named by its last argument,
+    STUB_EDITOR_SIGNAL is a signal number the editor sends itself.
     """
 
     command: str
