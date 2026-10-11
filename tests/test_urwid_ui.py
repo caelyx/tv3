@@ -1424,6 +1424,17 @@ class TestSnippetWidth:
         assert snippet.endswith("…")
         assert marked(frame, 4) == ["needle"]
 
+    def test_snippet_fills_the_list_above_the_preview(self, make_frame):
+        cols = urwid_ui.PREVIEW_BESIDE_MIN_COLS - 1
+        frame = make_frame({"recipes.txt": self.BODY}, size=(cols, 24))
+        type_text(frame, "needle")
+        press(frame, "ctrl p")
+
+        snippet = _snippet_row(frame, 4)
+        assert len(snippet) == cols - 2 * urwid_ui.LIST_PADDING - len(urwid_ui.SNIPPET_INDENT)
+        assert "needle" in snippet
+        assert any(set(line.strip()) == {"─"} for line in screen_lines(frame)[5:])
+
     def test_snippet_follows_a_resized_screen(self, make_frame):
         frame = make_frame({"recipes.txt": self.BODY})
         type_text(frame, "needle")
@@ -1757,6 +1768,24 @@ class TestDelete:
         assert highlighted(frame) == []
         assert search_line(frame) == "ban"
         assert "No matching notes" in "\n".join(screen_lines(frame))
+
+    def test_note_that_left_the_list_while_asked_about_is_deleted(self, make_frame, notes_dir):
+        frame = make_frame({"apple.txt": "fruit", "zed.txt": "fruit"})
+        frame.tv_notebook.close()
+        type_text(frame, "fruit")
+        press(frame, "down", "ctrl k")
+        assert status_line(frame) == "Delete 'zed'? (y/N)"
+        path = notes_dir / "zed.txt"
+        path.write_text("vegetable")
+
+        _watcher_event_in_loop(
+            frame, FileModifiedEvent(str(path)), lambda: list_titles(frame) == ["apple"]
+        )
+        press(frame, "y")
+
+        assert sorted(p.name for p in notes_dir.iterdir()) == ["apple.txt"]
+        assert status_line(frame) == "Deleted 'zed'"
+        assert highlighted(frame) == []
 
     def test_capital_y_deletes(self, make_frame, notes_dir):
         frame = make_frame({"a.txt": "", "b.txt": ""})

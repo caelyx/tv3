@@ -2311,6 +2311,23 @@ class TestContentCache:
 
         assert len([r for r in caplog.records if "Error reading note" in r.message]) == 1
 
+    @pytest.mark.skipif(is_root(), reason="root can read any file")
+    def test_note_that_cannot_be_read_is_logged_once_and_searched_as_empty(
+        self, temp_notes_dir, write_notes, unwatched_notebook, caplog
+    ):
+        write_notes(temp_notes_dir, {"a.txt": "x"})
+        nb = unwatched_notebook(temp_notes_dir, cls=HookedNoteBook)
+        path = Path(nb.path, "a.txt")
+        path.chmod(0)
+        try:
+            with caplog.at_level(logging.ERROR, logger="tv3"):
+                assert self.found(nb, "x") == []
+                assert self.found(nb, "a") == ["a"]
+        finally:
+            path.chmod(0o644)
+
+        assert len([r for r in caplog.records if "Error reading note" in r.message]) == 1
+
     def test_directory_added_later_is_read_when_it_is_added(
         self, temp_notes_dir, unwatched_notebook
     ):

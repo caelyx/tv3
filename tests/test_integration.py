@@ -291,13 +291,11 @@ class TestRealTerminal:
 
     def test_ctrl_s_does_not_stop_output(self, terminal):
         term = terminal()
-        term.read(0.2)
         term.send(b"\x13")
-        term.read(0.2)
 
-        term.send(b"x")
+        term.send(b"qzx")
 
-        assert term.read(2)
+        assert term.read_until(b"qzx"), term.output
         term.send(b"\x18")
         assert term.wait() == 0
 
