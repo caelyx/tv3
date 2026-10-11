@@ -825,28 +825,36 @@ class MainFrame(urwid.Frame):
             self.show_message(f"Could not run editor {self.editor}: {e}")
             return
         logger.debug(f"Running editor: {command}")
-        screen = self.loop.screen
-        screen.stop()
+        self.loop.screen.stop()
         try:
             returncode = call_with_interrupts_ignored(command)
         except OSError as e:
-            screen.start()
+            self._resume_screen()
             logger.error(f"Could not run editor {command}: {e}")
             self.show_message(f"Could not run editor {self.editor}: {e.strerror or e}")
             return
         except BaseException:
             try:
-                screen.start()
+                self._resume_screen()
             except Exception:
                 logger.exception("Could not restore the screen after the editor failed")
             raise
-        screen.start()
+        self._resume_screen()
         if returncode < 0:
             logger.error(f"Editor killed by signal {-returncode}: {command}")
             self.show_message(f"Editor killed by signal {-returncode}")
         elif returncode > 0:
             logger.error(f"Editor exited with status {returncode}: {command}")
             self.show_message(f"Editor exited with status {returncode}")
+
+    def _resume_screen(self):
+        """Restart the screen after the editor, and have the next redraw measure it.
+
+        A stopped screen does not watch for resizes, so the terminal may
+        have been resized while the editor ran.
+        """
+        self.loop.screen.start()
+        self.loop.screen_size = None
 
     def _update_body(self):
         if not len(self.tv_notebook):

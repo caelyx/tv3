@@ -726,6 +726,19 @@ class TestEditor:
 
         assert screen.events == [("stop", 0), ("start", 1)]
 
+    def test_screen_resized_while_the_editor_runs_is_drawn_at_its_new_size(self, make_frame):
+        frame = make_frame({"a.txt": ""})
+        screen = frame.loop.screen
+
+        def resize_while_stopped():
+            screen.size = (100, 30)
+
+        screen.probe = resize_while_stopped
+        press(frame, "down", "enter")
+
+        assert len(screen.lines) == 30
+        assert {len(line) for line in screen.lines} == {100}
+
     def test_editor_command_is_split_like_a_shell(
         self, make_frame, make_stub_editor, tmp_path, notes_dir
     ):

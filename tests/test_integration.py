@@ -342,6 +342,31 @@ class TestRealTerminal:
         term.send(b"\x18")
         assert term.wait() == 0
 
+    def test_resize_while_the_editor_runs_redraws_at_the_new_size(
+        self, terminal, tmp_path, write_notes, notes_dir
+    ):
+        write_notes(notes_dir, {"a.txt": ""})
+        started, done = tmp_path / "started", tmp_path / "done"
+        editor = tmp_path / "waiting-editor"
+        editor.write_text(
+            f"#!/bin/sh\ntouch {shlex.quote(str(started))}\n"
+            f"while [ ! -e {shlex.quote(str(done))} ]; do sleep 0.01; done\n"
+        )
+        editor.chmod(0o755)
+        term = terminal(editor=str(editor))
+
+        term.send(b"\x1b[B\r")
+        deadline = time.monotonic() + 10
+        while not started.exists() and time.monotonic() < deadline:
+            term.read(0.05)
+        assert started.exists(), term.output
+        fcntl.ioctl(term.fd, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
+        done.touch()
+
+        assert term.read_until(("┌" + "─" * 98 + "┐").encode()), term.output
+        term.send(b"\x18")
+        assert term.wait() == 0
+
     def test_ctrl_q_quits_from_a_prompt(self, terminal, write_notes, notes_dir):
         write_notes(notes_dir, {"a.txt": ""})
         term = terminal()
