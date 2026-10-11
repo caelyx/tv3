@@ -98,7 +98,7 @@ except Exception as e:
 **Impact:** Unpredictable behavior across environments.
 
 **Action Items:**
-- [x] Pin `watchdog` version in pyproject.toml (`watchdog>=2.0.0,<5.0.0`)
+- [x] Pin `watchdog` version in pyproject.toml (`watchdog>=6,<7`)
 - [x] Declare dependencies only in pyproject.toml
 - [x] ~~Document why urwid is pinned to 2.1.2~~ (pin removed: urwid 2.1.2 cannot start on Python 3.14; now `urwid>=4.2.5,<5`)
 - [ ] Test with specified versions

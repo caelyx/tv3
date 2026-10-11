@@ -3,15 +3,13 @@ name: Python application
 on: [push, pull_request]
 
 jobs:
-  test:
+  lint:
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v7
-    - name: Set up uv and Python 3.14
+    - name: Set up uv
       uses: astral-sh/setup-uv@v10.3.0
-      with:
-        python-version: "3.14"
     - name: Install dependencies
       run: uv sync --locked
     - name: Lint with ruff
@@ -22,9 +20,29 @@ jobs:
         uv run ruff check .
     - name: Format check with ruff
       run: uv run ruff format --check .
+    - name: Type check with mypy
+      run: uv run mypy src
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.11", "3.12", "3.13", "3.14", "3.15"]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - uses: actions/checkout@v7
+    - name: Set up uv and Python ${{ matrix.python-version }}
+      uses: astral-sh/setup-uv@v10.3.0
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Install dependencies
+      run: uv sync --locked
     - name: Run tests with coverage
       run: uv run pytest --cov=src/tv3 --cov-report=xml --cov-report=term-missing --cov-fail-under=80
     - name: Upload coverage reports
+      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.14'
       uses: codecov/codecov-action@v7
       with:
         files: ./coverage.xml
