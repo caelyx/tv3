@@ -1324,6 +1324,33 @@ class TestRename:
         assert status_line(frame).startswith("Could not rename b.txt to bx.txt")
         assert sorted(p.name for p in notes_dir.iterdir()) == ["a.txt"]
 
+    @pytest.mark.parametrize("key, question", [("ctrl r", "Rename: b"), ("ctrl k", "Delete 'b'?")])
+    def test_note_replaced_while_prompting_is_reported(self, make_frame, notes_dir, key, question):
+        frame = make_frame({"a.txt": "", "b.txt": ""})
+        frame.tv_notebook.close()
+        _select(frame, "b")
+        press(frame, key)
+        path = notes_dir / "b.txt"
+        screen = frame.loop.screen
+        drawn = len(screen.drawn)
+
+        def replace(*_):
+            path.unlink()
+            _dispatch_from_thread(frame, FileDeletedEvent(str(path)))
+            path.write_text("new")
+            _dispatch_from_thread(frame, FileCreatedEvent(str(path)))
+
+        frame.loop.set_alarm_in(0, replace)
+        assert run_headless(frame.loop, lambda: len(screen.drawn) > drawn + 1)
+        assert status_line(frame).startswith(question)
+
+        press(frame, "x" if key == "ctrl r" else "y")
+        if key == "ctrl r":
+            press(frame, "enter")
+
+        assert status_line(frame) == "b has changed; refresh and try again"
+        assert sorted(p.name for p in notes_dir.iterdir()) == ["a.txt", "b.txt"]
+
 
 class TestDelete:
     def test_ctrl_k_asks_and_y_deletes_selecting_the_next_note(self, make_frame, notes_dir):

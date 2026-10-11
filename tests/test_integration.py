@@ -322,3 +322,27 @@ class TestRealTerminal:
         assert term.wait() == 0
         assert {"ixon", "-ixany"} <= _stty_flags(stty_in_editor.read_text())
         assert {"ixon", "-ixany"} <= _stty_flags(term.stty_after.read_text())
+
+    def test_rename_delete_and_preview_keys_reach_tv3(
+        self, terminal, write_notes, notes_dir, wait_until
+    ):
+        write_notes(notes_dir, {"a.txt": "alpha body", "b.txt": "bravo body"})
+        term = terminal()
+        term.send(b"\x1b[B")
+        term.read(0.3)
+
+        term.send(b"\x10")
+        assert term.read_until(b"bravo body"), term.output
+
+        term.send(b"\x12")
+        assert term.read_until(b"Rename:"), term.output
+        term.send(b"2\r")
+        wait_until(lambda: sorted(p.name for p in notes_dir.iterdir()) == ["a.txt", "b2.txt"])
+
+        term.send(b"\x0b")
+        assert term.read_until(b"Delete 'b2'? (y/N)"), term.output
+        term.send(b"y")
+        wait_until(lambda: sorted(p.name for p in notes_dir.iterdir()) == ["a.txt"])
+
+        term.send(b"\x18")
+        assert term.wait() == 0
