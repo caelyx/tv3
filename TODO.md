@@ -52,8 +52,10 @@ def close(self):
         self._observer.stop()
         self._observer.join(timeout=5)
 
+
 def __enter__(self):
     return self
+
 
 def __exit__(self, exc_type, exc_val, exc_tb):
     self.close()
@@ -247,7 +249,7 @@ except Exception as e:
 **Examples:**
 ```python
 # Before
-message = '\'{} doesn\'t exist, creating it'
+message = "'{} doesn't exist, creating it"
 logger.debug(message.format(directory))
 logger.debug("Creating filename: {}".format(filename))
 
@@ -409,9 +411,9 @@ WATCHDOG_SETTLE_TIME = 0.5  # seconds to wait for filesystem to settle
 
 **Implementation:**
 ```python
-def wait_for_condition(condition: Callable[[], bool],
-                      timeout: float = 2.0,
-                      poll_interval: float = 0.1) -> bool:
+def wait_for_condition(
+    condition: Callable[[], bool], timeout: float = 2.0, poll_interval: float = 0.1
+) -> bool:
     """Wait for a condition to become true.
 
     Args:
@@ -428,6 +430,7 @@ def wait_for_condition(condition: Callable[[], bool],
             return True
         time.sleep(poll_interval)
     return False
+
 
 # Usage in tests:
 assert wait_for_condition(lambda: len(notebook) == expected_count)
@@ -455,10 +458,10 @@ It combines finding and creating notes in a single minimal interface and
 delegates the note-taking itself to your $EDITOR.
 """
 
-__version__ = '0.1.0'
-__author__ = 'Aramís Concepción Durán'
-__license__ = 'GNU General Public License, Version 3'
-__all__ = ['terminal_velocity', 'tv_notebook', 'urwid_ui']
+__version__ = "0.1.0"
+__author__ = "Aramís Concepción Durán"
+__license__ = "GNU General Public License, Version 3"
+__all__ = ["terminal_velocity", "tv_notebook", "urwid_ui"]
 
 # Could also import main for convenience
 from .terminal_velocity import main

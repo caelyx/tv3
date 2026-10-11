@@ -177,10 +177,10 @@ def test_with_temp_dir(temp_notes_dir):
 
 ### Mocking UI Components
 ```python
-@patch('urwid_ui.system')
+@patch("urwid_ui.system")
 def test_ui_action(mock_system, temp_notes_dir):
     """Mock external commands to test UI without side effects."""
-    frame = urwid_ui.MainFrame(temp_notes_dir, 'vim', '.txt', ['.txt'])
+    frame = urwid_ui.MainFrame(temp_notes_dir, "vim", ".txt", [".txt"])
     frame.loop = Mock()
     # Test UI actions
 ```
