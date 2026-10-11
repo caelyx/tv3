@@ -419,6 +419,7 @@ class MainFrame(urwid.Frame):
                 self.show_message(str(e))
                 return
         self.edit(note)
+        self.tv_notebook.refresh(note)
         self.filter(self.search_box.edit_text, keep=note)
         if self.selected_note != note:
             self.set_search_text(note.title, keep=note)
