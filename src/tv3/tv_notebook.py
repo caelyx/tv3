@@ -7,11 +7,15 @@ import tempfile
 import threading
 import unicodedata
 from collections.abc import Callable, Iterable, Iterator
+from dataclasses import dataclass, field
+from functools import cached_property
 from typing import NamedTuple
 
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 from watchdog.observers.api import BaseObserver
+
+from tv3 import ranking
 
 logger = logging.getLogger("tv3")
 
@@ -258,6 +262,47 @@ class PlainTextNote:
         return f"PlainTextNote({self.abspath!r})"
 
 
+@dataclass(frozen=True, eq=False)
+class Result:
+    """A note found by `PlainTextNoteBook.find`, with what to highlight.
+
+    Spans are half-open `(start, end)` character ranges, sorted and
+    non-overlapping: `title_spans` index `note.title`, `snippet_spans` index
+    `snippet`. `snippet` is a line from the note's contents, or None.
+
+    Exact-match title spans and the snippet are worked out on first access,
+    from the note's contents at that time, so a search costs nothing for
+    results that are never shown.
+    """
+
+    note: PlainTextNote
+    _words: tuple[str, ...] = field(repr=False)
+    _snippet_width: int = field(repr=False)
+    _fuzzy_spans: tuple[ranking.Span, ...] | None = field(default=None, repr=False)
+
+    @cached_property
+    def title_spans(self) -> tuple[ranking.Span, ...]:
+        if self._fuzzy_spans is not None:
+            return self._fuzzy_spans
+        return ranking.word_spans(self.note.title, self._words)
+
+    @cached_property
+    def _snippet(self) -> tuple[str, tuple[ranking.Span, ...]] | None:
+        return ranking.snippet(
+            self.note.title, self.note.contents, self._words, self._snippet_width
+        )
+
+    @property
+    def snippet(self) -> str | None:
+        snippet = self._snippet
+        return snippet[0] if snippet is not None else None
+
+    @property
+    def snippet_spans(self) -> tuple[ranking.Span, ...]:
+        snippet = self._snippet
+        return snippet[1] if snippet is not None else ()
+
+
 def brute_force_search(notebook, query):
     """Return all notes in `notebook` that match `query`.
 
@@ -380,6 +425,37 @@ class PlainTextNoteBook:
         if warmer is not None and query.split():
             warmer.join()
         return self.search_function(self, query)
+
+    def find(self, query: str, snippet_width: int = ranking.SNIPPET_WIDTH) -> list[Result]:
+        """The notes matching `query`, best first, with what to highlight.
+
+        The notes are those `search` returns plus those whose title fuzzy
+        matches the whole query (see `ranking.fuzzy_needle`). An empty query
+        gives every note, newest first. Otherwise fuzzy title matches come
+        first, best score first, then the other notes newest first. Ties go
+        to the newer note.
+
+        A fuzzy match's title spans are the fuzzy-matched characters; other
+        notes' title spans are the query words found in the title. Notes
+        whose title lacks a query word get a snippet of `snippet_width`
+        characters at most (see `ranking.snippet`).
+        """
+        words = tuple(query.split())
+        exact = self.search(query)
+        needle = ranking.fuzzy_needle(query)
+        fuzzy = []
+        if needle is not None:
+            for note in self:
+                match = ranking.fuzzy_match(needle, note.title)
+                if match is not None:
+                    fuzzy.append((match[0], note.mtime, note, match[1]))
+        fuzzy.sort(key=lambda m: (m[0], m[1]), reverse=True)
+        fuzzy_notes = {m[2] for m in fuzzy}
+        rest = [note for note in exact if note not in fuzzy_notes]
+        rest.sort(key=lambda n: n.mtime, reverse=True)
+        return [Result(note, words, snippet_width, spans) for _, _, note, spans in fuzzy] + [
+            Result(note, words, snippet_width) for note in rest
+        ]
 
     def refresh(self, note: PlainTextNote) -> bool:
         """Re-read `note`'s file now instead of waiting for the watcher.

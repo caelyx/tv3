@@ -21,6 +21,7 @@ from watchdog.events import (
 
 from tests.conftest import BASE_MTIME
 from tv3 import tv_notebook
+from tv3.ranking import SNIPPET_WIDTH, fuzzy_match
 from tv3.tv_notebook import (
     FileEventHandler,
     InvalidNoteTitleError,
@@ -892,6 +893,168 @@ class TestSearchSemantics:
         first.clear()
 
         assert len(nb.search("")) == 4
+
+
+FIND_NOTES = {
+    "meeting notes.txt": "agenda for the budget",
+    "mtg plan.txt": "the meeting is tomorrow",
+    "zebra.txt": "stripes and a maze",
+    "maze.txt": "a zebra in a maze",
+    "abc 1.txt": "x",
+    "abc 2.txt": "y",
+    "groceries.md": "milk eggs",
+}
+NEWEST_FIRST = ["groceries", "abc 2", "abc 1", "maze", "zebra", "mtg plan", "meeting notes"]
+
+
+class TestFind:
+    @pytest.fixture
+    def nb(self, temp_notes_dir, write_notes, unwatched_notebook):
+        write_notes(temp_notes_dir, FIND_NOTES)
+        return unwatched_notebook(temp_notes_dir)
+
+    @pytest.mark.parametrize(
+        ("query", "expected"),
+        [
+            pytest.param("", NEWEST_FIRST, id="empty"),
+            pytest.param(" \t ", NEWEST_FIRST, id="blank"),
+            pytest.param(
+                "m",
+                ["groceries", "maze", "zebra", "mtg plan", "meeting notes"],
+                id="one-character-exact-only",
+            ),
+            pytest.param("mtg", ["mtg plan", "meeting notes"], id="fuzzy-and-fuzzy-only"),
+            pytest.param("budget", ["meeting notes"], id="exact-only"),
+            pytest.param("maze", ["maze", "zebra"], id="fuzzy-then-exact"),
+            pytest.param("ze", ["zebra", "maze"], id="both-by-score"),
+            pytest.param("abc", ["abc 2", "abc 1"], id="tie-newer-first"),
+            pytest.param("ZE", ["zebra", "maze"], id="uppercase-fuzzy"),
+            pytest.param("MAZE", ["maze"], id="uppercase-exact-is-case-sensitive"),
+            pytest.param("m p", ["mtg plan", "zebra"], id="space-in-fuzzy-query"),
+            pytest.param("milk eggs", ["groceries"], id="multi-word-exact"),
+            pytest.param("xyzzy", [], id="nothing"),
+        ],
+    )
+    def test_order(self, nb, query, expected):
+        assert [r.note.title for r in nb.find(query)] == expected
+
+    @pytest.mark.parametrize(
+        ("query", "expected"),
+        [
+            pytest.param(
+                "",
+                dict.fromkeys(NEWEST_FIRST, ((), None, ())),
+                id="empty",
+            ),
+            pytest.param(
+                "m",
+                {
+                    "groceries": ((), "milk eggs", ((0, 1),)),
+                    "maze": (((0, 1),), None, ()),
+                    "zebra": ((), "stripes and a maze", ((14, 15),)),
+                    "mtg plan": (((0, 1),), None, ()),
+                    "meeting notes": (((0, 1),), None, ()),
+                },
+                id="one-character",
+            ),
+            pytest.param(
+                "mtg",
+                {
+                    "mtg plan": (((0, 3),), None, ()),
+                    "meeting notes": (((0, 1), (3, 4), (6, 7)), None, ()),
+                },
+                id="fuzzy",
+            ),
+            pytest.param(
+                "budget",
+                {"meeting notes": ((), "agenda for the budget", ((15, 21),))},
+                id="exact-in-contents",
+            ),
+            pytest.param(
+                "maze",
+                {
+                    "maze": (((0, 4),), None, ()),
+                    "zebra": ((), "stripes and a maze", ((14, 18),)),
+                },
+                id="fuzzy-then-exact",
+            ),
+            pytest.param(
+                "ZE",
+                {"zebra": (((0, 2),), None, ()), "maze": (((2, 4),), None, ())},
+                id="uppercase-query-gets-real-positions",
+            ),
+            pytest.param(
+                "m p",
+                {
+                    "mtg plan": (((0, 1), (3, 5)), None, ()),
+                    "zebra": ((), "stripes and a maze", ((4, 5), (14, 15))),
+                },
+                id="exact-words-in-title-and-snippet",
+            ),
+        ],
+    )
+    def test_spans_and_snippets(self, nb, query, expected):
+        found = {r.note.title: (r.title_spans, r.snippet, r.snippet_spans) for r in nb.find(query)}
+        assert found == expected
+
+    def test_exact_title_spans_use_smart_case(
+        self, temp_notes_dir, write_notes, unwatched_notebook
+    ):
+        write_notes(temp_notes_dir, {"plan Plan.txt": "x"})
+        nb = unwatched_notebook(temp_notes_dir)
+
+        (lower,) = nb.find("plan x")
+        (upper,) = nb.find("Plan x")
+
+        assert (lower.title_spans, lower.snippet, lower.snippet_spans) == (
+            ((0, 4), (5, 9)),
+            "x",
+            ((0, 1),),
+        )
+        assert (upper.title_spans, upper.snippet, upper.snippet_spans) == (
+            ((5, 9),),
+            "x",
+            ((0, 1),),
+        )
+
+    def test_result_is_immutable(self, nb):
+        result = nb.find("zebra")[0]
+
+        with pytest.raises(AttributeError):
+            result.snippet = "x"
+
+    def test_result_set_is_exact_matches_plus_fuzzy_title_matches(self, nb):
+        for query in ["m", "mtg", "ze", "ZE", "maze", "m p", "abc", "a", "e", "budget"]:
+            exact = {n.title for n in nb.search(query)}
+            needle = query.strip().lower()
+            fuzzy = (
+                {n.title for n in nb if fuzzy_match(needle, n.title) is not None}
+                if len(needle) >= 2
+                else set()
+            )
+            assert {r.note.title for r in nb.find(query)} == exact | fuzzy, query
+
+    def test_snippet_width(self, temp_notes_dir, write_notes, unwatched_notebook):
+        write_notes(temp_notes_dir, {"plan.txt": "intro " * 50 + "budget" + " outro" * 50})
+        nb = unwatched_notebook(temp_notes_dir)
+
+        (wide,) = nb.find("budget")
+        (narrow,) = nb.find("budget", snippet_width=20)
+
+        assert len(wide.snippet) == SNIPPET_WIDTH
+        assert len(narrow.snippet) == 20
+        assert [narrow.snippet[a:b] for a, b in narrow.snippet_spans] == ["budget"]
+
+    def test_sees_watcher_changes(self, nb):
+        path = Path(nb.path, "zebra.txt")
+        path.write_text("now about budget")
+        os.utime(path, (BASE_MTIME + 100, BASE_MTIME + 100))
+        FileEventHandler(nb).on_modified(FileModifiedEvent(str(path)))
+
+        assert [r.snippet for r in nb.find("budget")] == [
+            "now about budget",
+            "agenda for the budget",
+        ]
 
 
 class TestContentCache:
