@@ -361,7 +361,8 @@ class PlainTextNoteBook:
     for that file.
 
     `on_change`, if set, is called with no arguments from the watcher thread
-    after an event that added, removed or modified a note.
+    after an event that added, removed or modified a note, and from the
+    background thread once its read has finished and `loaded` is true.
     """
 
     def __init__(
@@ -397,6 +398,7 @@ class PlainTextNoteBook:
         self._truncation_lock = threading.Lock()
 
         self._closed = threading.Event()
+        self._loaded = threading.Event()
         self._warmer: threading.Thread | None = None
 
         self._observer: BaseObserver | None = Observer()
@@ -418,6 +420,11 @@ class PlainTextNoteBook:
     def path(self) -> str:
         return self._path
 
+    @property
+    def loaded(self) -> bool:
+        """Whether the background read has finished, so a search will not wait for it."""
+        return self._loaded.is_set()
+
     def search(self, query):
         """Return a list of the notes that match the given query.
 
@@ -426,7 +433,7 @@ class PlainTextNoteBook:
         work and be slower. An empty query needs no contents and does not wait.
         """
         warmer = self._warmer
-        if warmer is not None and query.split():
+        if warmer is not None and query.split() and not self.loaded:
             warmer.join()
         return self.search_function(self, query)
 
@@ -505,6 +512,8 @@ class PlainTextNoteBook:
             if self._closed.is_set():
                 return
             note._loaded()
+        self._loaded.set()
+        self._notify()
 
     def create(self, title: str) -> PlainTextNote:
         """Create an empty note file for `title` and add it to the notebook.

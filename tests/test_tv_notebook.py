@@ -1915,6 +1915,43 @@ class TestBackgroundRead:
         assert len(nb.search("x")) == 50
         assert nb.warmer_finished.is_set()
 
+    def test_loaded_and_notifies_once_the_background_read_finishes(
+        self, temp_notes_dir, write_notes, notebook
+    ):
+        write_notes(temp_notes_dir, {f"n{i}.txt": "x" for i in range(50)})
+        gate = threading.Event()
+        nb = notebook(temp_notes_dir, cls=HookedNoteBook, warmer_gate=gate)
+        notified = threading.Event()
+        seen = []
+
+        def on_change():
+            seen.append((nb.loaded, len(nb.search("x"))))
+            notified.set()
+
+        nb.on_change = on_change
+        assert not nb.loaded
+
+        gate.set()
+
+        assert notified.wait(5)
+        assert nb.warmer_finished.wait(5)
+        assert seen == [(True, 50)]
+        assert nb.loaded
+
+    def test_not_loaded_and_no_notification_when_closed_before_the_read(
+        self, temp_notes_dir, write_notes, notebook
+    ):
+        write_notes(temp_notes_dir, {f"n{i}.txt": "x" for i in range(50)})
+        nb = notebook(temp_notes_dir, cls=HookedNoteBook)
+        changes = ChangeRecorder(nb)
+        nb.on_change = changes
+
+        nb.close()
+
+        assert nb.warmer_finished.is_set()
+        assert changes.calls == 0
+        assert not nb.loaded
+
 
 @pytest.mark.slow
 class TestRealWatcher:
