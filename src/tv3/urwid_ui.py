@@ -883,8 +883,8 @@ def autoselection(results, query):
     if not results:
         return None
     top = results[0]
-    prefix = unicodedata.normalize("NFC", query).lower()
-    return top.note if top.exact and top.note.title.lower().startswith(prefix) else None
+    prefix = unicodedata.normalize("NFC", query).casefold()
+    return top.note if top.exact and top.note.title.casefold().startswith(prefix) else None
 
 
 def call_with_interrupts_ignored(command):
