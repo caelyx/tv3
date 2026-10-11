@@ -765,10 +765,13 @@ class TestRealWatcher:
         path = os.path.join(nb.path, "first_note.txt")
 
         os.remove(path)
-
         wait_until(lambda: "first_note" not in titles(nb))
-        assert len(nb) == 3
-        assert not os.path.exists(path)
+        Path(nb.path, "sentinel.txt").write_text("")
+        wait_until(lambda: "sentinel" in titles(nb))
+
+        assert "first_note" not in titles(nb)
+        assert len(nb) == 4
+        assert not os.path.lexists(path)
 
     def test_detects_rename(self, populated_notes_dir, notebook, wait_until):
         nb = notebook(populated_notes_dir)
