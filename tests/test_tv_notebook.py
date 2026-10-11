@@ -18,6 +18,7 @@ from watchdog.events import (
     FileMovedEvent,
 )
 
+from tests.conftest import BASE_MTIME
 from tv3 import tv_notebook
 from tv3.tv_notebook import (
     FileEventHandler,
@@ -783,6 +784,291 @@ class TestBruteForceSearch:
 
         assert [n.title for n in nb.search("meeting 2025")] == ["meeting_notes"]
         assert nb.search("meeting xyz") == []
+
+
+SEARCH_NOTES = {
+    "Meeting notes.txt": "Discussed the Budget for 2025.\nCAFÉ order",
+    "groceries.md": "milk, eggs, café au lait",
+    "Zebra.txt": "stripes",
+    "foo.txt": "bar",
+}
+ALL_SEARCH_TITLES = ["Meeting notes", "Zebra", "foo", "groceries"]
+
+
+class TestSearchSemantics:
+    @pytest.mark.parametrize(
+        ("query", "expected"),
+        [
+            ("", ALL_SEARCH_TITLES),
+            ("  \t ", ALL_SEARCH_TITLES),
+            ("meeting", ["Meeting notes"]),
+            ("Meeting", ["Meeting notes"]),
+            ("MEETING", []),
+            ("budget", ["Meeting notes"]),
+            ("Budget", ["Meeting notes"]),
+            ("BUDGET", []),
+            ("discussed budget", ["Meeting notes"]),
+            ("  discussed   budget ", ["Meeting notes"]),
+            ("meeting Budget", ["Meeting notes"]),
+            ("meeting BUDGET", []),
+            ("discussed milk", []),
+            ("café", ["Meeting notes", "groceries"]),
+            ("CAFÉ", ["Meeting notes"]),
+            ("Café", []),
+            ("2025", ["Meeting notes"]),
+            ("2025.", ["Meeting notes"]),
+            ("eggs,", ["groceries"]),
+            ("zebra", ["Zebra"]),
+            ("zebra stripes", ["Zebra"]),
+            ("Zebra stripes", ["Zebra"]),
+            ("ZEBRA", []),
+            ("foo bar", ["foo"]),
+            ("foobar", []),
+            ("o", ["Meeting notes", "foo", "groceries"]),
+            ("xyzzy", []),
+        ],
+    )
+    def test_query(self, temp_notes_dir, write_notes, unwatched_notebook, query, expected):
+        write_notes(temp_notes_dir, SEARCH_NOTES)
+        nb = unwatched_notebook(temp_notes_dir)
+
+        assert sorted(n.title for n in nb.search(query)) == expected
+        assert sorted(n.title for n in tv_notebook.brute_force_search(nb, query)) == expected
+
+    def test_search_returns_a_new_list_each_time(self, populated_notes_dir, unwatched_notebook):
+        nb = unwatched_notebook(populated_notes_dir)
+        first = nb.search("")
+        first.clear()
+
+        assert len(nb.search("")) == 4
+
+
+class TestContentCache:
+    """Searches use in-memory copies of the notes; watcher events update them."""
+
+    def make(self, notes_dir, write_notes, unwatched_notebook, notes):
+        write_notes(notes_dir, notes)
+        nb = unwatched_notebook(notes_dir)
+        return nb, FileEventHandler(nb)
+
+    def found(self, nb, query):
+        return sorted(n.title for n in nb.search(query))
+
+    def test_search_does_not_read_files_once_cached(
+        self, temp_notes_dir, write_notes, unwatched_notebook
+    ):
+        nb, _ = self.make(
+            temp_notes_dir, write_notes, unwatched_notebook, {"a.txt": "apple", "b.txt": "banana"}
+        )
+        assert self.found(nb, "apple") == ["a"]
+        os.remove(Path(nb.path, "a.txt"))
+        Path(nb.path, "b.txt").write_text("cherry")
+
+        assert self.found(nb, "apple") == ["a"]
+        assert self.found(nb, "banana") == ["b"]
+        assert self.found(nb, "cherry") == []
+
+    def test_modified_event_rereads_note(self, temp_notes_dir, write_notes, unwatched_notebook):
+        nb, handler = self.make(temp_notes_dir, write_notes, unwatched_notebook, {"a.txt": "old"})
+        recorder = ChangeRecorder(nb)
+        nb.on_change = recorder
+        assert self.found(nb, "old") == ["a"]
+        path = Path(nb.path, "a.txt")
+        path.write_text("new")
+        os.utime(path, (2_000_000_000, 2_000_000_000))
+
+        handler.on_modified(FileModifiedEvent(str(path)))
+
+        assert self.found(nb, "old") == []
+        assert self.found(nb, "new") == ["a"]
+        assert [n.mtime for n in nb] == [2_000_000_000]
+        assert recorder.calls == 1
+
+    def test_modified_event_without_change_does_not_notify(
+        self, temp_notes_dir, write_notes, unwatched_notebook
+    ):
+        nb, handler = self.make(temp_notes_dir, write_notes, unwatched_notebook, {"a.txt": "same"})
+        recorder = ChangeRecorder(nb)
+        nb.on_change = recorder
+        nb.search("same")
+
+        handler.on_modified(FileModifiedEvent(os.path.join(nb.path, "a.txt")))
+
+        assert recorder.calls == 0
+
+    def test_atomic_save_by_rename_rereads_note(
+        self, temp_notes_dir, write_notes, unwatched_notebook
+    ):
+        nb, handler = self.make(temp_notes_dir, write_notes, unwatched_notebook, {"a.txt": "old"})
+        assert self.found(nb, "old") == ["a"]
+        tmp = os.path.join(nb.path, ".a.txt.tmp")
+        dest = os.path.join(nb.path, "a.txt")
+        Path(tmp).write_text("new")
+        os.replace(tmp, dest)
+
+        handler.on_moved(FileMovedEvent(tmp, dest))
+
+        assert self.found(nb, "old") == []
+        assert self.found(nb, "new") == ["a"]
+
+    def test_backup_rename_then_rewrite_rereads_note(
+        self, temp_notes_dir, write_notes, unwatched_notebook
+    ):
+        nb, handler = self.make(temp_notes_dir, write_notes, unwatched_notebook, {"a.txt": "old"})
+        assert self.found(nb, "old") == ["a"]
+        path = os.path.join(nb.path, "a.txt")
+        backup = path + "~"
+        os.rename(path, backup)
+        Path(path).write_text("new")
+        os.remove(backup)
+
+        handler.on_moved(FileMovedEvent(path, backup))
+        handler.on_created(FileCreatedEvent(path))
+        handler.on_deleted(FileDeletedEvent(backup))
+
+        assert self.found(nb, "old") == []
+        assert self.found(nb, "new") == ["a"]
+
+    def test_created_event_for_known_note_rereads_it(
+        self, temp_notes_dir, write_notes, unwatched_notebook
+    ):
+        nb, handler = self.make(temp_notes_dir, write_notes, unwatched_notebook, {"a.txt": "old"})
+        assert self.found(nb, "old") == ["a"]
+        path = Path(nb.path, "a.txt")
+        path.write_text("new")
+
+        handler.on_created(FileCreatedEvent(str(path)))
+
+        assert self.found(nb, "new") == ["a"]
+
+    def test_external_delete_removes_note_from_results(
+        self, temp_notes_dir, write_notes, unwatched_notebook
+    ):
+        nb, handler = self.make(
+            temp_notes_dir, write_notes, unwatched_notebook, {"a.txt": "apple", "b.txt": "apple"}
+        )
+        assert self.found(nb, "apple") == ["a", "b"]
+        path = os.path.join(nb.path, "a.txt")
+        os.remove(path)
+
+        handler.on_deleted(FileDeletedEvent(path))
+
+        assert self.found(nb, "apple") == ["b"]
+
+    def test_create_caches_the_new_note(self, temp_notes_dir, unwatched_notebook):
+        nb = unwatched_notebook(temp_notes_dir)
+        note = nb.create("fresh idea")
+        mtime = os.stat(note.abspath).st_mtime
+        os.remove(note.abspath)
+
+        assert self.found(nb, "fresh idea") == ["fresh idea"]
+        assert note.contents == ""
+        assert note.mtime == mtime
+
+    def test_create_then_edit_is_seen_after_event(self, temp_notes_dir, unwatched_notebook):
+        nb = unwatched_notebook(temp_notes_dir)
+        note = nb.create("plan")
+        Path(note.abspath).write_text("remember the milk")
+
+        FileEventHandler(nb).on_modified(FileModifiedEvent(note.abspath))
+
+        assert self.found(nb, "milk") == ["plan"]
+
+    def test_mtime_is_cached_until_an_event(self, temp_notes_dir, write_notes, unwatched_notebook):
+        nb, handler = self.make(temp_notes_dir, write_notes, unwatched_notebook, {"a.txt": "x"})
+        (note,) = list(nb)
+        assert note.mtime == BASE_MTIME
+        os.utime(note.abspath, (BASE_MTIME + 100, BASE_MTIME + 100))
+
+        assert note.mtime == BASE_MTIME
+
+        handler.on_modified(FileModifiedEvent(note.abspath))
+
+        assert note.mtime == BASE_MTIME + 100
+
+    def test_refresh_rereads_at_once(self, temp_notes_dir, write_notes, unwatched_notebook):
+        nb, _ = self.make(temp_notes_dir, write_notes, unwatched_notebook, {"a.txt": "old"})
+        (note,) = list(nb)
+        assert self.found(nb, "old") == ["a"]
+        Path(note.abspath).write_text("new")
+
+        assert nb.refresh(note) is True
+        assert self.found(nb, "new") == ["a"]
+        assert nb.refresh(note) is False
+
+    def test_refresh_ignores_notes_not_in_notebook(self, temp_notes_dir, unwatched_notebook):
+        nb = unwatched_notebook(temp_notes_dir)
+        Path(nb.path, "loose.txt").write_text("x")
+
+        assert nb.refresh(tv_notebook.PlainTextNote("loose", nb, ".txt")) is False
+        assert len(nb) == 0
+
+    def test_refresh_with_a_replaced_note_object_updates_the_notebook(
+        self, temp_notes_dir, write_notes, unwatched_notebook
+    ):
+        nb, handler = self.make(temp_notes_dir, write_notes, unwatched_notebook, {"a.txt": "old"})
+        (held,) = list(nb)
+        path = held.abspath
+        os.rename(path, path + "~")
+        handler.on_moved(FileMovedEvent(path, path + "~"))
+        Path(path).write_text("")
+        handler.on_created(FileCreatedEvent(path))
+        Path(path).write_text("new")
+
+        assert nb.refresh(held) is True
+        assert self.found(nb, "new") == ["a"]
+
+    def test_read_that_raced_with_event_does_not_overwrite_it(
+        self, temp_notes_dir, write_notes, unwatched_notebook
+    ):
+        nb, handler = self.make(temp_notes_dir, write_notes, unwatched_notebook, {"a.txt": "old"})
+        (note,) = list(nb)
+        seen = note._cached
+        stale = note._read()
+        Path(note.abspath).write_text("new")
+        handler.on_modified(FileModifiedEvent(note.abspath))
+
+        note._store_if_unchanged(seen, stale)
+
+        assert note.contents == "new"
+
+    def test_unreadable_note_is_logged_once_and_searched_as_empty(
+        self, temp_notes_dir, unwatched_notebook, caplog
+    ):
+        nb = unwatched_notebook(temp_notes_dir)
+        sub = Path(nb.path, "sub")
+        sub.mkdir()
+        (sub / "a.txt").write_text("x")
+        FileEventHandler(nb).on_created(DirCreatedEvent(str(sub)))
+        os.remove(sub / "a.txt")
+
+        with caplog.at_level(logging.ERROR, logger="tv3"):
+            assert self.found(nb, "x") == []
+            assert self.found(nb, "a") == [os.path.join("sub", "a")]
+
+        assert len([r for r in caplog.records if "Error reading note" in r.message]) == 1
+
+
+class TestBackgroundRead:
+    def test_notes_are_read_after_startup(self, temp_notes_dir, write_notes, notebook):
+        write_notes(temp_notes_dir, {f"n{i}.txt": f"word{i}" for i in range(50)})
+        nb = notebook(temp_notes_dir)
+        nb._warmer.join()
+        nb.close()
+        for path in Path(temp_notes_dir).iterdir():
+            path.unlink()
+
+        assert sorted(n.title for n in nb.search("word7")) == ["n7"]
+        assert len(nb.search("word")) == 50
+
+    def test_close_stops_background_read(self, temp_notes_dir, write_notes, notebook):
+        write_notes(temp_notes_dir, {f"n{i}.txt": "x" for i in range(50)})
+        nb = notebook(temp_notes_dir)
+        warmer = nb._warmer
+
+        nb.close()
+
+        assert not warmer.is_alive()
 
 
 @pytest.mark.slow
