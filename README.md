@@ -60,10 +60,12 @@ Run `tv3 [notes_dir]`; the notes directory defaults to `~/Notes`. Defaults can
 be set in `~/.tvrc`; see `tv3 --help` for all options.
 The editor is split like a shell command, so quote a path that contains spaces.
 
-Type to search, or to name a new note. Titles that start with what you typed
-come first, then fuzzy title matches, then notes that contain every word. The
-top note is selected only if its full title starts with what you typed, so
-typing `pasta` doesn't select `recipes/Pasta sauce`, and `Enter` creates `pasta`.
+Type to search, or to name a new note. Titles that start with what you typed,
+ignoring case, come first, then fuzzy title matches, then notes that contain
+every word. The top note is selected only if its full title starts with what
+you typed, so typing `pasta` doesn't select `recipes/Pasta sauce`, and `Enter`
+creates `pasta`. Typing `Foo` selects an existing note `foo`, and `Enter` opens
+it rather than creating `Foo`.
 
 | Key                | Action                                                   |
 | ------------------ | -------------------------------------------------------- |

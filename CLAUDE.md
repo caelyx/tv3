@@ -20,7 +20,8 @@ The codebase is the `tv3` package in `src/tv3/`, organized into four modules
    - `PlainTextNoteBook`: Manages a directory of plain text notes
    - `PlainTextNote`: Represents individual note files
    - `brute_force_search()`: Implements case-sensitive/insensitive search across note titles and contents
-   - `PlainTextNoteBook.find()`: Returns ranked `Result`s carrying title highlight spans and a matching-line snippet
+   - `PlainTextNoteBook.find()`: Returns ranked `Result`s carrying title highlight spans, a matching-line snippet and the `exact`/`prefix` flags
+   - `PlainTextNoteBook.note_at(abspath)`: The notebook's current note for a path, or None
    - `PlainTextNoteBook.rename()` / `delete()`: Rename or delete a note's file; both refuse a note that has changed on disk since it was listed
    - Content cache: each note's first 1 MiB and mtime are kept in memory and re-read on watcher events, so searches read no files
    - `loaded`: A background thread reads every note at startup; `loaded` is true once it finishes, and searches with words wait for it
@@ -38,17 +39,20 @@ The codebase is the `tv3` package in `src/tv3/`, organized into four modules
    - Match spans for highlighting, and the matching-line snippet shown under a note
    - Snippets are cut to a width in terminal columns, measured with wcwidth as urwid measures them, so wide characters (CJK, emoji) never push the match or the closing `…` off-screen
    - `printable()`: Replaces control characters with spaces (used for snippets and the preview)
+   - `fold()`, `starts_with()`, `prefix_length()`: The one caseless title-prefix rule, used by `find()` for ordering and `Result.prefix`, and by the search box to draw the completion
 
 ### Key Architecture Notes
 
 - The notebook automatically watches the notes directory for external changes using watchdog's Observer pattern
-- Result order (`PlainTextNoteBook.find()`). An exact match has every query word in its title or contents (smart case):
+- Result order (`PlainTextNoteBook.find()`). An exact match has every query word in its title or contents (smart case). A prefix match is a note whose full title starts with the query ignoring case and Unicode normalisation, whatever the query's case (`ranking.starts_with`, built on `ranking.fold`: NFC, casefold, NFC, so `strasse` starts `Straße`); smart case applies only to exact matches:
   - Empty query: every note, newest first
-  - 1. Exact matches whose title equals the query (ignoring case), newest first
-  - 2. Other exact matches whose full title starts with the query (ignoring case), newest first
+  - 1. Prefix matches whose title equals the query, newest first
+  - 2. Other prefix matches, newest first
   - 3. Fuzzy title matches, best score first. Fuzzy matching needs a query of 3+ characters and is against the title's last path component, or the full title if the query contains `/`
   - 4. The remaining exact matches, newest first
-- The selection is always the top row, and is set automatically only when that row is an exact match whose full title starts with the typed text (NV prefix semantics): typing `pasta` does not select `recipes/Pasta sauce`, so `Enter` creates `pasta` at the root. A note found only by fuzzy matching is never selected automatically
+- The automatic selection (as you type) is always the top row; Up/Down/delete move it. It is set only when that row is a prefix match (`Result.prefix`; NV prefix semantics): typing `pasta` does not select `recipes/Pasta sauce`, so `Enter` creates `pasta` at the root. A note found only by fuzzy or body matching is never selected automatically
+- Prefix matching ignores case, so with a note `foo`, typing `Foo` selects it and `Enter` opens `foo`, even on a case-sensitive filesystem, instead of creating `Foo` (as in NV)
+- The search box shows the selected title as a completion of the typed text, covering `ranking.prefix_length(title, typed)` characters of it; a title is selected exactly when it can be shown that way
 - The UI provides synchronized autocomplete between the search box and filtered note list
 - Editor integration uses subprocess to launch external editors and returns to the UI when done
 
@@ -138,6 +142,7 @@ All settings must be in the `[DEFAULT]` section; any other section, or an unknow
 - `terminal_velocity.py`, `tv_notebook.py` and `urwid_ui.py` use the same logger: `logging.getLogger("tv3")`
 - Note titles can include directory separators for organizing notes in subdirectories
 - The `PlainTextNote.contents` property handles UTF-8 decoding with error tolerance
-- Search is case-insensitive if search terms are lowercase, case-sensitive otherwise
+- Search is case-insensitive if search terms are lowercase, case-sensitive otherwise (smart case); title prefix matching always ignores case
+- A watcher event whose file has already gone (deleted or moved on) is not an error: the note is left for the deleted or moved event that follows, so the index never drops a note whose file still exists
 - Only the first 1 MiB of a note is searchable; the rest is not read
 - Changes made to a network-mounted notes folder by other machines may not be seen until the file is changed again locally or tv3 restarts: the watcher only reports local filesystem events

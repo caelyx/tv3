@@ -119,6 +119,18 @@ UI tests drive a real `MainFrame` with keys and assert on what it draws:
 - **`footer_rows`**: The status line's rows as `(text, attributes)`, or `[]` when there is none (a failed rename shows two: the error and the prompt)
 - **`RecordingScreen`** / **`ScriptedScreen`** / **`run_headless`**: A headless screen for running a real `urwid_ui.MainLoop`
 
+## Races (tests/test_tv_notebook.py)
+
+**`HookedNoteBook`** is a real notebook whose file reads, note-file checks and
+writes can be interleaved with other work, to reproduce watcher races
+deterministically instead of with sleeps: `before_next_read`,
+`during_next_read`, `after_next_check`, `before_next_write` and `warmer_gate`.
+
+Seeded random tests check the ordering and selection rules over awkward
+Unicode (`ß`, `ﬁ`, `İ`, combining marks): `TestPrefixLength`,
+`TestFind::test_top_row_is_autoselectable_whenever_any_prefix_match_is` and
+`TestCaselessPrefix::test_selection_and_completion_agree_with_the_prefix_rule`.
+
 ## Continuous Integration
 
 These tests are CI-ready:
