@@ -225,6 +225,12 @@ class MainFrame(urwid.Frame):
     The selected note is the list's focused note while the list has fake
     focus; the search box's completion always shows its title. A footer
     shows a message until the next keypress.
+
+    Typing does not refilter at once: it clears the selection and leaves a
+    refilter pending, which `flush_filter()` runs. Inside a main loop that
+    happens when the loop has handled all waiting input, before it redraws,
+    so a burst of keys refilters once. Any other key or mouse event runs a
+    pending refilter before it is handled.
     """
 
     def __init__(
@@ -253,6 +259,8 @@ class MainFrame(urwid.Frame):
             exclude=exclude,
         )
         self.loop = None
+        self._idle_handle = None
+        self._pending_filter = None
         self._wake_fd = None
         self._wake_lock = threading.Lock()
         self.search_box = AutocompleteWidget()
@@ -269,8 +277,13 @@ class MainFrame(urwid.Frame):
         self.filter(self.search_box.edit_text)
 
     def attach(self, loop):
-        """Run inside `loop`: refresh from notebook changes and use its screen."""
+        """Run inside `loop`: refresh from notebook changes and use its screen.
+
+        Must be called before `loop.run()`, so that pending refilters run
+        before the loop redraws.
+        """
         self.loop = loop
+        self._idle_handle = loop.event_loop.enter_idle(self.flush_filter)
         self._wake_fd = loop.watch_pipe(self._on_notebook_changed)
         os.set_blocking(self._wake_fd, False)
         self.tv_notebook.on_change = self._wake
@@ -279,6 +292,9 @@ class MainFrame(urwid.Frame):
         """Stop the file watcher and release the main loop pipe."""
         self.tv_notebook.on_change = None
         self.tv_notebook.close()
+        if self._idle_handle is not None:
+            self.loop.event_loop.remove_enter_idle(self._idle_handle)
+            self._idle_handle = None
         with self._wake_lock:
             if self._wake_fd is not None:
                 self.loop.remove_watch_pipe(self._wake_fd)
@@ -295,10 +311,17 @@ class MainFrame(urwid.Frame):
                 os.write(self._wake_fd, b"\0")
 
     def _on_notebook_changed(self, _data):
-        selected = self.selected_note
         self.list_box.prune(set(self.tv_notebook))
-        self.filter(self.search_box.edit_text, keep=selected, autoselect=selected is not None)
+        if self._pending_filter is None:
+            selected = self.selected_note
+            self._pending_filter = (selected, selected is not None)
         return True
+
+    def flush_filter(self):
+        """Run the pending refilter, if any."""
+        if self._pending_filter is not None:
+            keep, autoselect = self._pending_filter
+            self.filter(self.search_box.edit_text, keep=keep, autoselect=autoselect)
 
     @property
     def selected_note(self):
@@ -334,6 +357,9 @@ class MainFrame(urwid.Frame):
             Key if not handled, None if handled.
         """
         self.footer = None
+        # Only typing with nothing selected can leave the list stale.
+        if not (self.search_box.valid_char(key) and self.selected_note is None):
+            self.flush_filter()
         selected = self.selected_note
         if key in ["esc", "ctrl d", "ctrl u"]:
             if selected is not None:
@@ -361,8 +387,12 @@ class MainFrame(urwid.Frame):
             return self._edit_search(size, key)
         return None
 
+    def mouse_event(self, size, event, button, col, row, focus):
+        self.flush_filter()
+        return super().mouse_event(size, event, button, col, row, focus)
+
     def _edit_search(self, size, key, autoselect=True):
-        """Pass `key` to the search box and refilter if its text changed.
+        """Pass `key` to the search box and leave a refilter pending if its text changed.
 
         When the selected note's title is shown in place of the typed text,
         an editing key edits the title.
@@ -376,7 +406,8 @@ class MainFrame(urwid.Frame):
             self.search_box.consume()
         result = self.header.keypress((size[0],), key)
         if self.search_box.edit_text != before:
-            self.filter(self.search_box.edit_text, autoselect=autoselect)
+            self.select(None)
+            self._pending_filter = (None, autoselect)
         return result
 
     def _backspace(self, size):
@@ -461,6 +492,7 @@ class MainFrame(urwid.Frame):
         `keep` stays selected if it still matches. Otherwise, if `autoselect`,
         the newest note whose title starts with `query` is selected.
         """
+        self._pending_filter = None
         self.body = self._list_body if len(self.tv_notebook) else self._empty_body
         matching_notes = self.tv_notebook.search(query)
         matching_notes.sort(key=lambda x: x.mtime, reverse=True)
