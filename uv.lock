@@ -411,6 +411,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pfzy"
+version = "0.3.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d9/5a/32b50c077c86bfccc7bed4881c5a2b823518f5450a30e639db5d3711952e/pfzy-0.3.4.tar.gz", hash = "sha256:717ea765dd10b63618e7298b2d98efd819e0b30cd5905c9707223dceeb94b3f1", size = 8396, upload-time = "2022-01-28T02:26:17.946Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8c/d7/8ff98376b1acc4503253b685ea09981697385ce344d4e3935c2af49e044d/pfzy-0.3.4-py3-none-any.whl", hash = "sha256:5f50d5b2b3207fa72e7ec0ef08372ef652685470974a107d0d4999fc5a903a96", size = 8537, upload-time = "2022-01-28T02:26:16.047Z" },
+]
+
+[[package]]
 name = "pluggy"
 version = "1.6.0"
 source = { registry = "https://pypi.org/simple" }
@@ -560,6 +569,7 @@ name = "tv3"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "pfzy" },
     { name = "urwid" },
     { name = "watchdog" },
 ]
@@ -574,6 +584,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "pfzy", specifier = ">=0.3.4,<0.4" },
     { name = "urwid", specifier = ">=4.2.5,<5" },
     { name = "watchdog", specifier = ">=6,<7" },
 ]

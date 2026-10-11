@@ -14,6 +14,7 @@ requires-python = ">=3.11"
 dependencies = [
     "urwid>=4.2.5,<5",
     "watchdog>=6,<7",
+    "pfzy>=0.3.4,<0.4",
 ]
 
 [project.scripts]
