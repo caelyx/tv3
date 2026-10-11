@@ -1260,6 +1260,15 @@ class TestSnippetWidth:
 
         assert "needle" in _snippet_row(frame, 4)
 
+    def test_wide_characters_after_the_match_leave_the_end_ellipsis_on_screen(self, make_frame):
+        frame = make_frame({"日記.txt": "日本語" * 30 + " needle " + "日本語" * 30}, size=(40, 24))
+        type_text(frame, "needle")
+
+        snippet = _snippet_row(frame, 4)
+        assert snippet.startswith("…")
+        assert snippet.endswith("…")
+        assert marked(frame, 4) == ["needle"]
+
     def test_snippet_follows_a_resized_screen(self, make_frame):
         frame = make_frame({"recipes.txt": self.BODY})
         type_text(frame, "needle")

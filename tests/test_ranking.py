@@ -7,10 +7,18 @@ import unicodedata
 
 import pytest
 from pfzy import fzy_scorer
+from urwid import calc_width
 
-from tv3.ranking import fuzzy_match, fuzzy_needle, snippet, word_spans
+from tv3.ranking import fuzzy_match, fuzzy_needle, printable, snippet, word_spans
 
 DOTTED_I = "\u0130"  # U+0130 lowercases to two characters, "i" and a combining dot
+
+WIDE = ["中文字", "😀", "❤\ufe0f", "👨\u200d👩\u200d👧", "\uff46\uff55\uff4c\uff4c"]
+
+
+def columns(text):
+    """The display width of `text` as urwid measures it."""
+    return calc_width(text, 0, len(text))
 
 
 class TestFuzzyNeedle:
@@ -182,6 +190,21 @@ class TestWordSpans:
         assert word_spans(text, words) == spans
 
 
+class TestPrintable:
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("plain", "plain"),
+            ("a\tb\nc", "a b c"),
+            ("esc\x1b[31m", "esc [31m"),
+            ("c1\x80\x9f\x7f", "c1   "),
+            ("nbsp\xa0中\u200d", "nbsp\xa0中\u200d"),
+        ],
+    )
+    def test_control_characters_become_spaces(self, text, expected):
+        assert printable(text) == expected
+
+
 class TestSnippet:
     @pytest.mark.parametrize(
         ("title", "contents", "words", "expected"),
@@ -260,8 +283,42 @@ class TestSnippet:
 
         assert text.startswith("…")
         assert not unicodedata.combining(text[1])
-        assert len(text) <= 12
+        assert columns(text) <= 12
         assert [text[a:b] for a, b in spans] == ["budget"]
+
+    @pytest.mark.parametrize("width", [5, 6, 7, 8, 9, 10, 11, 12, 15, 20, 31])
+    @pytest.mark.parametrize("wide", WIDE)
+    @pytest.mark.parametrize("side", ["before", "after", "both"])
+    def test_window_fits_wide_characters_in_width_columns(self, side, wide, width):
+        before = wide * 20 if side in ("before", "both") else "x" * 40
+        after = wide * 20 if side in ("after", "both") else "y" * 40
+        text, spans = snippet("title", before + "zap" + after, ["zap"], width=width)
+
+        assert width - 1 <= columns(text) <= width
+        assert text.startswith("…") and text.endswith("…")
+        assert [text[a:b] for a, b in spans] == ["zap"]
+
+    @pytest.mark.parametrize("wide", WIDE)
+    def test_line_of_wide_characters_that_fits_is_whole(self, wide):
+        line = wide + " zap " + wide
+        text, _ = snippet("title", line, ["zap"], width=columns(line))
+
+        assert text == line
+
+    @pytest.mark.parametrize("wide", WIDE)
+    def test_line_one_column_too_wide_is_cut(self, wide):
+        line = wide * 3 + " zap " + wide * 3
+        text, spans = snippet("title", line, ["zap"], width=columns(line) - 1)
+
+        assert columns(text) <= columns(line) - 1
+        assert [text[a:b] for a, b in spans] == ["zap"]
+
+    def test_window_does_not_split_a_grapheme_cluster(self):
+        family = "👨\u200d👩\u200d👧"
+        text, _ = snippet("title", family * 20 + "zap" + family * 20, ["zap"], width=12)
+
+        assert text.strip("…").startswith(family)
+        assert text.strip("…").endswith(family)
 
     def test_window_spans_include_every_word_and_clip_at_edges(self):
         line = "alpha beta " + "pad " * 10 + "budget " + "pad " * 10 + "alphabet"

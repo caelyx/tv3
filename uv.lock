@@ -572,6 +572,7 @@ dependencies = [
     { name = "pfzy" },
     { name = "urwid" },
     { name = "watchdog" },
+    { name = "wcwidth" },
 ]
 
 [package.dev-dependencies]
@@ -587,6 +588,7 @@ requires-dist = [
     { name = "pfzy", specifier = ">=0.3.4,<0.4" },
     { name = "urwid", specifier = ">=4.2.5,<5" },
     { name = "watchdog", specifier = ">=6,<7" },
+    { name = "wcwidth", specifier = ">=0.4,<1" },
 ]
 
 [package.metadata.requires-dev]

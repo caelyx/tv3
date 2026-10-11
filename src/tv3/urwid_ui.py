@@ -366,7 +366,7 @@ class Preview(urwid.Widget):
             if rows_left <= 0:
                 break
             limit = maxcol * rows_left
-            line = line[:limit].expandtabs(4)[:limit].translate(ranking._CONTROL_TO_SPACE)
+            line = ranking.printable(line[:limit].expandtabs(4)[:limit])
             shown.append(line)
             rows_left -= max(1, -(-len(line) // maxcol))
         return urwid.Filler(urwid.Text("\n".join(shown)), valign=urwid.TOP).render(size)

@@ -19,6 +19,7 @@ import re
 import unicodedata
 from collections.abc import Iterable, Sequence
 
+import wcwidth
 from pfzy import fzy_scorer
 
 Span = tuple[int, int]
@@ -32,6 +33,11 @@ ELLIPSIS = "…"
 _LINE_BREAKS = "\n\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029"
 _LINE_BREAK = re.compile(f"[{re.escape(_LINE_BREAKS)}]")
 _CONTROL_TO_SPACE = {c: " " for c in range(0xA0) if unicodedata.category(chr(c)) == "Cc"}
+
+
+def printable(text: str) -> str:
+    """`text` with each control character (Unicode category Cc) replaced by a space."""
+    return text.translate(_CONTROL_TO_SPACE)
 
 
 def fuzzy_needle(query: str) -> str | None:
@@ -95,12 +101,12 @@ def snippet(
     None if `title` contains every word or `contents` does not contain the
     first word missing from the title. Otherwise the excerpt is the first
     line of `contents` containing that word, without leading and trailing
-    whitespace, cut to at most `width` characters around the word's first
-    occurrence. ELLIPSIS marks each cut end and counts towards `width`.
-    Control characters (Unicode category Cc, such as tabs and C1 controls)
-    become spaces. A cut never leaves a combining mark at the start of the
-    excerpt. The spans cover every word of `words` in the excerpt, clipped
-    to it.
+    whitespace, cut around the word's first occurrence to at most `width`
+    terminal columns (for a `width` of at least 2), as wcwidth measures
+    them. ELLIPSIS marks each cut end and counts towards `width`. Cuts fall
+    between grapheme clusters. Control characters (Unicode category Cc,
+    such as tabs and C1 controls) become spaces. The spans cover every word
+    of `words` in the excerpt, clipped to it.
     """
     word = next((w for w in words if not contains(title, w)), None)
     if word is None:
@@ -116,12 +122,10 @@ def snippet(
     line_start += len(line) - len(stripped)
     line = stripped.rstrip()
 
-    begin, end = _window(len(line), start - line_start, width)
-    while 0 < begin < end and unicodedata.combining(line[begin]):
-        begin += 1
+    begin, end = _window(line, start - line_start, len(word), width)
     prefix = ELLIPSIS if begin > 0 else ""
     suffix = ELLIPSIS if end < len(line) else ""
-    text = prefix + line[begin:end].translate(_CONTROL_TO_SPACE) + suffix
+    text = prefix + printable(line[begin:end]) + suffix
 
     margin = max(len(w) for w in words)
     context = max(0, begin - margin)
@@ -134,22 +138,67 @@ def snippet(
     return text, tuple(spans)
 
 
-def _window(length: int, match: int, width: int) -> Span:
-    """The range of a line of `length` characters to show around index `match`.
+def _window(line: str, match: int, length: int, width: int) -> Span:
+    """The range of `line` to show around the `length` characters at index
+    `match`, cut between grapheme clusters.
 
     Leaves room for an ellipsis at each end that is cut, so the shown range
-    plus its ellipses is at most `width` characters. About a quarter of the
-    width precedes the match.
+    plus its ellipses is at most `width` columns wide (for a `width` of at
+    least 2). Up to a quarter of the width precedes the match, less if that
+    would cut off a match that fits with both ellipses. If the line ends
+    before the width is used up, the rest goes before the match too.
     """
-    if length <= width:
-        return 0, length
-    begin = max(0, match - width // 4)
-    if begin == 0:
-        return 0, width - 1
-    end = begin + width - 1
-    if end >= length:
-        return length - (width - 1), length
-    return begin, end - 1
+    match_cols = wcwidth.width(printable(line[match : match + length]), control_codes="ignore")
+    match = wcwidth.grapheme_boundary_before(line, match + 1)
+    lead = width // 4
+    if match_cols + 2 <= width:
+        lead = min(lead, width - match_cols - 2)
+    before = _cluster_sizes(wcwidth.iter_graphemes_reverse(line, 0, match), width)
+    after = _cluster_sizes(wcwidth.iter_graphemes(line, match), width)
+    whole_before = sum(n for n, _ in before) == match
+    whole_after = sum(n for n, _ in after) == len(line) - match
+
+    def is_cut(clusters, taken, whole):
+        return taken < len(clusters) or not whole
+
+    taken_before, cols_before = _fit(before, lead)
+    cut_before = is_cut(before, taken_before, whole_before)
+    room = width - cols_before - cut_before
+    taken_after, cols_after = _fit(after, room)
+    if is_cut(after, taken_after, whole_after):
+        taken_after, cols_after = _fit(after, room - 1)
+    elif cut_before:
+        taken_before, _ = _fit(before, width - cols_after)
+        if is_cut(before, taken_before, whole_before):
+            taken_before, _ = _fit(before, width - cols_after - 1)
+    begin = match - sum(n for n, _ in before[:taken_before])
+    end = match + sum(n for n, _ in after[:taken_after])
+    return begin, end
+
+
+def _cluster_sizes(clusters: Iterable[str], width: int) -> list[tuple[int, int]]:
+    """Length in characters and width in columns of each of `clusters`,
+    until they are more than `width` columns wide in total."""
+    sizes = []
+    total = 0
+    for cluster in clusters:
+        if total > width:
+            break
+        cols = wcwidth.width(printable(cluster), control_codes="ignore")
+        sizes.append((len(cluster), cols))
+        total += cols
+    return sizes
+
+
+def _fit(sizes: Sequence[tuple[int, int]], width: int) -> tuple[int, int]:
+    """How many of `sizes`, from the first, fit in `width` columns, and their width."""
+    taken = total = 0
+    for _, cols in sizes:
+        if total + cols > width:
+            break
+        taken += 1
+        total += cols
+    return taken, total
 
 
 def _find(text: str, word: str) -> int:
