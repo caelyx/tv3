@@ -42,7 +42,7 @@ class TestEndToEndWorkflow:
         assert list_lines(frame) == ["shopping", "older"]
 
         type_text(frame, "milk")
-        assert list_lines(frame) == ["shopping"]
+        assert list_lines(frame) == ["shopping", "remember the milk"]
 
     def test_search_and_clear(self, make_frame, populated_notes_dir):
         frame = make_frame()

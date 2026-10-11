@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.ui_helpers import RecordingScreen
+from tests.ui_helpers import SIZE, RecordingScreen
 from tv3 import tv_notebook, urwid_ui
 
 BASE_MTIME = 1_700_000_000
@@ -216,7 +216,8 @@ def notes_dir(temp_notes_dir):
 def make_frame(notes_dir, stub_editor, write_notes):
     """Factory: a MainFrame run by a headless urwid_ui.MainLoop, closed at teardown.
 
-    `notes` ({relpath: content}) are written first, later ones newer. Unless
+    `notes` ({relpath: content}) are written first, later ones newer. The
+    screen is `size` (columns, rows). Unless
     `wait_for_read` is false, the notebook has read every note before the
     frame is returned.
     """
@@ -228,6 +229,7 @@ def make_frame(notes_dir, stub_editor, write_notes):
         extension=".txt",
         extensions=(".txt", ".md"),
         wait_for_read=True,
+        size=SIZE,
     ):
         write_notes(notes_dir, notes or {})
         frame = urwid_ui.MainFrame(
@@ -239,7 +241,7 @@ def make_frame(notes_dir, stub_editor, write_notes):
         frames.append(frame)
         if wait_for_read:
             _wait_until(lambda: frame.tv_notebook.loaded)
-        urwid_ui.MainLoop(frame, urwid_ui.palette, screen=RecordingScreen(), handle_mouse=False)
+        urwid_ui.MainLoop(frame, urwid_ui.palette, screen=RecordingScreen(size), handle_mouse=False)
         return frame
 
     yield make

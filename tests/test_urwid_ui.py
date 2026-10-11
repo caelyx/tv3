@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 import urwid
-from watchdog.events import FileCreatedEvent, FileDeletedEvent
+from watchdog.events import FileCreatedEvent, FileDeletedEvent, FileModifiedEvent
 from watchdog.observers.api import BaseObserver
 
 from tests.test_tv_notebook import HookedNoteBook
@@ -25,9 +25,11 @@ from tests.ui_helpers import (
     FOCUSED,
     SIZE,
     ScriptedScreen,
+    attr_runs,
     feed,
     highlighted,
     list_lines,
+    marked,
     press,
     run_headless,
     screen_lines,
@@ -39,9 +41,11 @@ from tv3 import tv_notebook, urwid_ui
 
 
 class TestNoteWidget:
-    def test_renders_title_with_focus_attribute(self, notes_dir, notebook):
+    def test_renders_title_with_focus_attribute(self, notes_dir, notebook, write_notes):
+        write_notes(notes_dir, {"my note.txt": ""})
         nb = notebook(notes_dir)
-        widget = urwid_ui.NoteWidget(tv_notebook.PlainTextNote("my note", nb, ".txt"))
+        (result,) = nb.find("")
+        widget = urwid_ui.NoteWidget(result)
 
         focused = widget.render((20,), focus=True)
         unfocused = widget.render((20,), focus=False)
@@ -191,19 +195,19 @@ class TestFilteringAndRendering:
     def test_typing_filters_by_title_and_contents(self, make_frame):
         frame = make_frame({"apple.txt": "fruit", "banana.txt": "yellow fruit", "car.txt": ""})
         type_text(frame, "fruit")
-        assert list_lines(frame) == ["banana", "apple"]
+        assert list_lines(frame) == ["banana", "yellow fruit", "apple", "fruit"]
 
     def test_typing_autocompletes_newest_prefix_match(self, make_frame):
         frame = make_frame({"foo.txt": "", "foo bar.txt": "", "other.txt": "foo"})
         type_text(frame, "fo")
         assert search_line(frame) == "foo bar"
         assert highlighted(frame) == ["foo bar"]
-        assert list_lines(frame) == ["other", "foo bar", "foo"]
+        assert list_lines(frame) == ["foo", "foo bar", "other", "foo"]
 
     def test_unicode_search(self, make_frame):
         frame = make_frame({"greeting.txt": "こんにちは", "other.txt": "hello"})
         type_text(frame, "こんにちは")
-        assert list_lines(frame) == ["greeting"]
+        assert list_lines(frame) == ["greeting", "こんにちは"]
 
     def test_no_match_placeholder(self, make_frame):
         frame = make_frame({"a.txt": ""})
@@ -250,7 +254,8 @@ class TestSelection:
     ):
         frame = make_frame({"foo.txt": "", "foo bar.txt": ""})
         type_text(frame, "fo")
-        press(frame, "down", "down")
+        assert highlighted(frame) == ["foo bar"]
+        press(frame, "up")
         assert highlighted(frame) == ["foo"]
 
         press(frame, "tab")
@@ -362,7 +367,7 @@ class TestTypingOnANavigatedNote:
     def test_typing_appends_to_the_title(self, make_frame):
         frame = make_frame({"foo.txt": "", "zed.txt": "foo"})
         type_text(frame, "foo")
-        press(frame, "up")
+        press(frame, "down")
         assert highlighted(frame) == ["zed"]
         assert search_line(frame) == "zed"
 
@@ -404,7 +409,7 @@ class TestBackspace:
     def test_backspace_on_navigated_note_edits_its_title(self, make_frame):
         frame = make_frame({"apple.txt": "", "zebra.txt": "apple"})
         type_text(frame, "apple")
-        press(frame, "down", "up")
+        press(frame, "down")
         assert highlighted(frame) == ["zebra"]
         assert search_line(frame) == "zebra"
 
@@ -692,9 +697,9 @@ class TestInputBatches:
     def test_click_straight_after_typing_picks_from_the_filtered_list(self, make_frame):
         frame = make_frame({"apple.txt": "fruit", "banana.txt": "fruit", "cherry.txt": ""})
 
-        feed(frame, ["f", "r", "u", "i", "t", ("mouse press", 1, 5, 4)])
+        feed(frame, ["f", "r", "u", "i", "t", ("mouse press", 1, 5, 5)])
 
-        assert list_lines(frame) == ["banana", "apple"]
+        assert list_lines(frame) == ["banana", "fruit", "apple", "fruit"]
         assert highlighted(frame) == ["apple"]
 
     @pytest.mark.parametrize("key", ["down", "page down"])
@@ -758,7 +763,7 @@ class TestInputBatches:
 
         assert queries == ["fo"]
         assert drawn[1].strip(" │┃") == "fourteen"
-        assert [line.strip() for line in drawn[3:] if line.strip()] == ["fourteen", "foo"]
+        assert [line.strip() for line in drawn[3:] if line.strip()] == ["foo", "fourteen"]
         assert highlighted(frame) == ["fourteen"]
 
 
@@ -876,7 +881,6 @@ class TestNotebookChanges:
         screen = frame.loop.screen
         assert run_headless(frame.loop, lambda: [s.strip() for s in screen.lines[3:4]] == ["a"])
         assert list_lines(frame) == ["a"]
-        assert set(frame.list_box.widgets) == set(frame.tv_notebook)
 
         press(frame, "enter")
         assert not (notes_dir / "b.txt").exists()
@@ -1039,3 +1043,466 @@ class TestLaunch:
 
         assert [name for name, _ in self.screen.events] == ["start", "stop"]
         assert _observers() == observers
+
+
+def _dispatch_from_thread(frame, event):
+    """Deliver a watchdog `event` to `frame`'s notebook on another thread, as the watcher does."""
+    handler = tv_notebook.FileEventHandler(frame.tv_notebook)
+    thread = threading.Thread(target=handler.dispatch, args=(event,))
+    thread.start()
+    thread.join()
+
+
+def _watcher_event_in_loop(frame, event, until):
+    """Deliver `event` from inside `frame`'s running main loop; run it until `until()`."""
+    frame.loop.set_alarm_in(0, lambda *_: _dispatch_from_thread(frame, event))
+    assert run_headless(frame.loop, until)
+
+
+class TestHighlighting:
+    """Matched characters of titles and snippets are drawn with the match attribute."""
+
+    def test_query_words_in_a_title_are_marked(self, make_frame):
+        frame = make_frame({"foo bar.txt": "", "zed.txt": ""})
+        type_text(frame, "bar")
+
+        assert list_lines(frame) == ["foo bar"]
+        assert [run for run in attr_runs(frame)[3] if run[0] is not None] == [
+            ("notewidget unfocused", "foo "),
+            ("match", "bar"),
+            ("notewidget unfocused", " " * 71),
+        ]
+
+    def test_selected_note_uses_the_focused_match_attribute(self, make_frame):
+        frame = make_frame({"foo bar.txt": "", "zed.txt": ""})
+        type_text(frame, "bar")
+        press(frame, "down")
+
+        assert highlighted(frame) == ["foo bar"]
+        assert marked(frame, 3) == ["bar"]
+        assert {attr for attr, _ in attr_runs(frame)[3]} == {None, FOCUSED, "match focused"}
+
+    def test_fuzzy_title_match_marks_the_matched_characters(self, make_frame):
+        frame = make_frame({"apple banana.txt": "", "zed.txt": ""})
+        type_text(frame, "apbn")
+
+        assert list_lines(frame) == ["apple banana"]
+        assert "".join(marked(frame, 3)) == "apbn"
+
+    def test_matches_in_contents_get_a_snippet_line(self, make_frame):
+        frame = make_frame({"recipes.txt": "intro\n  pasta with tomato sauce  \nend", "z.txt": ""})
+        type_text(frame, "sauce")
+
+        assert list_lines(frame) == ["recipes", "pasta with tomato sauce"]
+        snippet = attr_runs(frame)[4]
+        assert ("match", "sauce") in snippet
+        assert {attr for attr, _ in snippet} == {None, "snippet", "match"}
+
+    def test_selected_snippet_uses_focused_attributes(self, make_frame):
+        frame = make_frame({"recipes.txt": "pasta sauce", "z.txt": ""})
+        type_text(frame, "sauce")
+        press(frame, "down")
+
+        assert highlighted(frame) == ["recipes"]
+        assert ("match focused", "sauce") in attr_runs(frame)[4]
+        assert "snippet focused" in {attr for attr, _ in attr_runs(frame)[4]}
+
+    def test_title_only_match_has_no_snippet(self, make_frame):
+        frame = make_frame({"sauce ideas.txt": "sauce sauce", "z.txt": ""})
+        type_text(frame, "sauce")
+        assert list_lines(frame) == ["sauce ideas"]
+
+    def test_long_titles_and_snippets_are_clipped_to_one_row(self, make_frame):
+        title = "a long title " * 10
+        frame = make_frame({f"{title.strip()}.txt": "word " * 40 + "needle " + "word " * 40})
+        type_text(frame, "needle")
+
+        lines = screen_lines(frame)
+        assert lines[3].strip() == title[:78].strip()
+        assert "needle" in lines[4]
+        assert lines[5].strip() == ""
+        assert marked(frame, 4) == ["needle"]
+
+    def test_autoselect_picks_the_newest_prefix_match_not_the_best_ranked(self, make_frame):
+        frame = make_frame({"fox.txt": "", "fox and hound.txt": ""})
+        type_text(frame, "fo")
+
+        assert list_lines(frame) == ["fox", "fox and hound"]
+        assert highlighted(frame) == ["fox and hound"]
+        assert search_line(frame) == "fox and hound"
+
+    def test_fuzzy_match_with_another_case_is_not_autoselected(self, make_frame):
+        frame = make_frame({"existing.txt": "", "zed.txt": ""})
+        type_text(frame, "Exi")
+
+        assert list_lines(frame) == ["existing"]
+        assert highlighted(frame) == []
+        assert search_line(frame) == "Exi"
+
+    def test_fuzzy_match_does_not_change_what_enter_creates(
+        self, make_frame, stub_editor, notes_dir
+    ):
+        frame = make_frame({"apple banana.txt": ""})
+        type_text(frame, "apbn")
+        assert highlighted(frame) == []
+
+        press(frame, "enter")
+
+        assert stub_editor.calls() == [[str(notes_dir / "apbn.txt")]]
+
+    def test_only_visible_rows_are_built(self, make_frame, monkeypatch):
+        frame = make_frame({f"note{i:03d}.txt": "body" for i in range(300)})
+        built = []
+        init = urwid_ui.NoteWidget.__init__
+
+        def counting_init(self, result):
+            built.append(result.note.title)
+            init(self, result)
+
+        type_text(frame, "bod")
+        monkeypatch.setattr(urwid_ui.NoteWidget, "__init__", counting_init)
+        type_text(frame, "y")
+
+        assert 0 < len(built) <= SIZE[1]
+
+
+def _select(frame, title):
+    """Select the note titled `title` by moving down from an empty search."""
+    press(frame, "down")
+    while highlighted(frame) != [title]:
+        press(frame, "down")
+
+
+class TestRename:
+    def test_ctrl_r_prompts_with_the_title_and_enter_renames(self, make_frame, notes_dir):
+        frame = make_frame({"a.txt": "", "old name.md": "body"})
+        _select(frame, "old name")
+        press(frame, "ctrl r")
+        assert status_line(frame) == "Rename: old name"
+
+        press(frame, *["backspace"] * 4)
+        type_text(frame, "title")
+        assert status_line(frame) == "Rename: old title"
+        press(frame, "enter")
+
+        assert sorted(p.name for p in notes_dir.iterdir()) == ["a.txt", "old title.md"]
+        assert (notes_dir / "old title.md").read_text() == "body"
+        assert frame.footer is None
+        assert highlighted(frame) == ["old title"]
+        assert search_line(frame) == "old title"
+
+    def test_renamed_note_is_selected_even_if_it_no_longer_matches(self, make_frame, notes_dir):
+        frame = make_frame({"apple.txt": "", "banana.txt": ""})
+        type_text(frame, "ban")
+        assert highlighted(frame) == ["banana"]
+
+        press(frame, "ctrl r", *["backspace"] * 6)
+        type_text(frame, "cherry")
+        press(frame, "enter")
+
+        assert highlighted(frame) == ["cherry"]
+        assert search_line(frame) == "cherry"
+        assert sorted(p.name for p in notes_dir.iterdir()) == ["apple.txt", "cherry.txt"]
+
+    def test_escape_cancels(self, make_frame, notes_dir):
+        frame = make_frame({"a.txt": "", "b.txt": ""})
+        _select(frame, "a")
+        press(frame, "ctrl r")
+        type_text(frame, "xyz")
+
+        press(frame, "esc")
+
+        assert frame.footer is None
+        assert sorted(p.name for p in notes_dir.iterdir()) == ["a.txt", "b.txt"]
+        assert highlighted(frame) == ["a"]
+        assert search_line(frame) == "a"
+
+    def test_keys_go_to_the_prompt_not_the_search_box(self, make_frame, stub_editor):
+        frame = make_frame({"a.txt": "", "b.txt": ""})
+        _select(frame, "b")
+        press(frame, "ctrl r")
+
+        press(frame, "down", "x", "ctrl x", "ctrl k", "ctrl p", "left", "y")
+
+        assert status_line(frame) == "Rename: byx"
+        assert highlighted(frame) == ["b"]
+        assert search_line(frame) == "b"
+        assert stub_editor.calls() == []
+
+    def test_cursor_is_in_the_prompt(self, make_frame):
+        frame = make_frame({"abc.txt": ""})
+        _select(frame, "abc")
+        press(frame, "ctrl r", "left")
+
+        canvas = frame.render(SIZE, focus=True)
+
+        assert canvas.cursor == (len("Rename: ab"), SIZE[1] - 1)
+
+    def test_error_is_reported_and_nothing_changes(self, make_frame, notes_dir):
+        frame = make_frame({"a.txt": "", "b.txt": ""})
+        _select(frame, "b")
+        press(frame, "ctrl r", "backspace")
+        type_text(frame, "a")
+
+        press(frame, "enter")
+
+        assert status_line(frame).startswith("Note already exists")
+        assert sorted(p.name for p in notes_dir.iterdir()) == ["a.txt", "b.txt"]
+        assert highlighted(frame) == ["b"]
+
+    def test_invalid_title_is_reported(self, make_frame, notes_dir):
+        frame = make_frame({"a.txt": ""})
+        _select(frame, "a")
+        press(frame, "ctrl r", "backspace")
+        type_text(frame, "../escape")
+
+        press(frame, "enter")
+
+        assert status_line(frame).startswith("Invalid note title")
+        assert sorted(p.name for p in notes_dir.iterdir()) == ["a.txt"]
+
+    def test_without_a_selection_shows_a_hint(self, make_frame):
+        frame = make_frame({"a.txt": ""})
+
+        press(frame, "ctrl r")
+
+        assert status_line(frame) == "Select a note to rename it"
+        press(frame, "x")
+        assert frame.footer is None
+        assert frame.search_box.edit_text == "x"
+
+    def test_prompt_survives_a_notebook_change(self, make_frame, notes_dir):
+        frame = make_frame({"a.txt": "", "b.txt": ""})
+        frame.tv_notebook.close()
+        _select(frame, "a")
+        press(frame, "ctrl r", "1")
+        path = notes_dir / "c.txt"
+        path.write_text("")
+
+        screen = frame.loop.screen
+        _watcher_event_in_loop(
+            frame,
+            FileCreatedEvent(str(path)),
+            lambda: "c" in [s.strip() for s in screen.lines[3:6]],
+        )
+
+        assert status_line(frame) == "Rename: a1"
+        press(frame, "2", "enter")
+        assert sorted(p.name for p in notes_dir.iterdir()) == ["a12.txt", "b.txt", "c.txt"]
+        assert highlighted(frame) == ["a12"]
+
+    def test_note_deleted_while_prompting_is_reported(self, make_frame, notes_dir):
+        frame = make_frame({"a.txt": "", "b.txt": ""})
+        frame.tv_notebook.close()
+        _select(frame, "b")
+        press(frame, "ctrl r")
+        (notes_dir / "b.txt").unlink()
+
+        screen = frame.loop.screen
+        _watcher_event_in_loop(
+            frame,
+            FileDeletedEvent(str(notes_dir / "b.txt")),
+            lambda: "no longer exists" in screen.lines[-1],
+        )
+
+        assert status_line(frame) == "'b' no longer exists"
+        assert list_lines(frame) == ["a"]
+        press(frame, "x")
+        assert frame.footer is None
+        assert frame.search_box.edit_text == "x"
+        assert sorted(p.name for p in notes_dir.iterdir()) == ["a.txt"]
+
+    def test_note_deleted_before_the_watcher_noticed_is_reported(self, make_frame, notes_dir):
+        frame = make_frame({"a.txt": "", "b.txt": ""})
+        frame.tv_notebook.close()
+        _select(frame, "b")
+        press(frame, "ctrl r", "x")
+        (notes_dir / "b.txt").unlink()
+
+        press(frame, "enter")
+
+        assert status_line(frame).startswith("Could not rename b.txt to bx.txt")
+        assert sorted(p.name for p in notes_dir.iterdir()) == ["a.txt"]
+
+
+class TestDelete:
+    def test_ctrl_k_asks_and_y_deletes_selecting_the_next_note(self, make_frame, notes_dir):
+        frame = make_frame({"a.txt": "", "b.txt": "", "c.txt": ""})
+        press(frame, "down", "down")
+        assert highlighted(frame) == ["b"]
+
+        press(frame, "ctrl k")
+        assert status_line(frame) == "Delete 'b'? (y/N)"
+        press(frame, "y")
+
+        assert sorted(p.name for p in notes_dir.iterdir()) == ["a.txt", "c.txt"]
+        assert frame.footer is None
+        assert list_lines(frame) == ["c", "a"]
+        assert highlighted(frame) == ["a"]
+        assert search_line(frame) == "a"
+
+    def test_deleting_the_last_note_in_the_list_selects_the_one_above(self, make_frame):
+        frame = make_frame({"a.txt": "", "b.txt": ""})
+        press(frame, "down", "down")
+        assert highlighted(frame) == ["a"]
+
+        press(frame, "ctrl k", "y")
+
+        assert list_lines(frame) == ["b"]
+        assert highlighted(frame) == ["b"]
+
+    def test_deleting_the_only_match_leaves_nothing_selected(self, make_frame, notes_dir):
+        frame = make_frame({"apple.txt": "", "banana.txt": ""})
+        type_text(frame, "ban")
+        assert highlighted(frame) == ["banana"]
+
+        press(frame, "ctrl k", "y")
+
+        assert sorted(p.name for p in notes_dir.iterdir()) == ["apple.txt"]
+        assert highlighted(frame) == []
+        assert search_line(frame) == "ban"
+        assert "No matching notes" in "\n".join(screen_lines(frame))
+
+    @pytest.mark.parametrize("key", ["n", "Y", "enter", "esc", "ctrl k"])
+    def test_any_other_key_cancels_and_is_not_handled_otherwise(
+        self, make_frame, notes_dir, stub_editor, key
+    ):
+        frame = make_frame({"a.txt": "", "b.txt": ""})
+        press(frame, "down")
+
+        press(frame, "ctrl k", key)
+
+        assert frame.footer is None
+        assert sorted(p.name for p in notes_dir.iterdir()) == ["a.txt", "b.txt"]
+        assert highlighted(frame) == ["b"]
+        assert search_line(frame) == "b"
+        assert stub_editor.calls() == []
+
+    def test_without_a_selection_shows_a_hint(self, make_frame, notes_dir):
+        frame = make_frame({"a.txt": ""})
+
+        press(frame, "ctrl k")
+
+        assert status_line(frame) == "Select a note to delete it"
+        press(frame, "y")
+        assert frame.search_box.edit_text == "y"
+        assert sorted(p.name for p in notes_dir.iterdir()) == ["a.txt"]
+
+    def test_note_deleted_while_asking_is_reported(self, make_frame, notes_dir):
+        frame = make_frame({"a.txt": "", "b.txt": ""})
+        frame.tv_notebook.close()
+        press(frame, "down", "ctrl k")
+        (notes_dir / "b.txt").unlink()
+
+        screen = frame.loop.screen
+        _watcher_event_in_loop(
+            frame,
+            FileDeletedEvent(str(notes_dir / "b.txt")),
+            lambda: "no longer exists" in screen.lines[-1],
+        )
+
+        assert status_line(frame) == "'b' no longer exists"
+        press(frame, "y")
+        assert frame.search_box.edit_text == "y"
+        assert sorted(p.name for p in notes_dir.iterdir()) == ["a.txt"]
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
+    def test_filesystem_error_is_reported(self, make_frame, notes_dir):
+        frame = make_frame({"a.txt": ""})
+        press(frame, "down", "ctrl k")
+        notes_dir.chmod(0o500)
+        try:
+            press(frame, "y")
+        finally:
+            notes_dir.chmod(0o700)
+
+        assert status_line(frame) == "Could not delete a.txt: Permission denied"
+        assert list_lines(frame) == ["a"]
+        assert highlighted(frame) == ["a"]
+
+
+WIDE = (120, 30)
+
+
+class TestPreview:
+    def test_ctrl_p_shows_the_selected_note_beside_the_list_on_a_wide_screen(self, make_frame):
+        frame = make_frame({"a.txt": "alpha body", "b.txt": "bravo body\nsecond line"}, size=WIDE)
+        press(frame, "down", "ctrl p")
+
+        lines = screen_lines(frame)
+        assert len(lines[3]) == WIDE[0]
+        assert lines[3].split() == ["b", "│", "bravo", "body"]
+        assert lines[4].split() == ["a", "│", "second", "line"]
+        assert lines[3].index("bravo") > WIDE[0] // 2 - 2
+
+    def test_preview_is_below_the_list_on_a_narrow_screen(self, make_frame):
+        frame = make_frame({"a.txt": "alpha body", "b.txt": "bravo body"})
+        press(frame, "down", "ctrl p")
+
+        lines = [line.strip() for line in screen_lines(frame)]
+        divider = next(i for i, line in enumerate(lines) if line and set(line) == {"─"})
+        assert lines[3:5] == ["b", "a"]
+        assert 5 < divider < SIZE[1] - 2
+        assert lines[divider + 1] == "bravo body"
+
+    def test_preview_follows_the_selection(self, make_frame):
+        frame = make_frame({"a.txt": "alpha body", "b.txt": "bravo body"}, size=WIDE)
+        press(frame, "ctrl p")
+        assert "No note selected" in "\n".join(screen_lines(frame))
+
+        press(frame, "down")
+        assert "bravo body" in screen_lines(frame)[3]
+        press(frame, "down")
+        assert "alpha body" in screen_lines(frame)[3]
+        press(frame, "esc")
+        type_text(frame, "b")
+        assert "bravo body" in screen_lines(frame)[3]
+
+    def test_ctrl_p_again_hides_the_preview(self, make_frame):
+        frame = make_frame({"a.txt": "alpha body"}, size=WIDE)
+        press(frame, "down", "ctrl p", "ctrl p")
+
+        assert list_lines(frame) == ["a"]
+        assert highlighted(frame) == ["a"]
+
+    def test_preview_shows_the_first_screenful_without_control_characters(self, make_frame):
+        body = "\n".join(f"line\t{i} {'x' * 100}\r" for i in range(200))
+        frame = make_frame({"a.txt": body}, size=WIDE)
+        press(frame, "down", "ctrl p")
+
+        lines = screen_lines(frame)
+        assert all(len(line) == WIDE[0] for line in lines)
+        assert "line    0 " in lines[3]
+        assert "\r" not in "".join(lines)
+
+    def test_list_keys_and_clicks_still_work_with_the_preview(self, make_frame):
+        notes = {f"note{i:02d}.txt": f"body {i}" for i in range(60)}
+        frame = make_frame(notes)
+        press(frame, "ctrl p", "down", "page down")
+        assert highlighted(frame)[0] != "note59"
+        press(frame, "esc", "down")
+        assert highlighted(frame) == ["note59"]
+
+        frame.mouse_event(SIZE, "mouse press", 1, 5, 4, True)
+
+        assert highlighted(frame) == ["note58"]
+        assert "body 58" in "\n".join(screen_lines(frame))
+
+    def test_preview_shows_changes_from_the_watcher(self, make_frame, notes_dir):
+        frame = make_frame({"a.txt": "old body"}, size=WIDE)
+        frame.tv_notebook.close()
+        press(frame, "down", "ctrl p")
+        path = notes_dir / "a.txt"
+        path.write_text("new body")
+        os.utime(path, (2_000_000_000, 2_000_000_000))
+
+        screen = frame.loop.screen
+        _watcher_event_in_loop(
+            frame, FileModifiedEvent(str(path)), lambda: "new body" in screen.lines[3]
+        )
+        assert [line.split() for line in highlighted(frame)] == [["a", "│", "new", "body"]]
+
+    def test_preview_with_an_empty_notebook_shows_the_empty_placeholder(self, make_frame):
+        frame = make_frame(size=WIDE)
+        press(frame, "ctrl p")
+        assert "You have no notes yet" in "\n".join(screen_lines(frame))

@@ -96,13 +96,18 @@ class ScriptedScreen(RecordingScreen):
         event_loop.alarm(0, step)
 
 
+def size(frame):
+    """The size of the screen `frame`'s main loop draws on."""
+    return frame.loop.screen.get_cols_rows()
+
+
 def press(frame, *keys):
     """Send `keys` one at a time, as the main loop handles keys that arrive apart.
 
     After each key the loop redraws, running any pending refilter first.
     """
     for key in keys:
-        frame.keypress(SIZE, key)
+        frame.keypress(size(frame), key)
         frame.loop.draw_screen()
 
 
@@ -112,12 +117,33 @@ def type_text(frame, text):
 
 def rows(frame):
     """The rendered frame as a list of (text, attrs) per row."""
-    canvas = frame.render(SIZE, focus=True)
+    return [
+        ("".join(text for _, text in runs), {attr for attr, _ in runs}) for runs in attr_runs(frame)
+    ]
+
+
+def attr_runs(frame):
+    """The rendered frame as a list of rows, each a list of (attr, text) runs.
+
+    Adjacent runs with the same attribute are joined.
+    """
+    canvas = frame.render(size(frame), focus=True)
     result = []
     for row in canvas.content():
-        text = b"".join(run for _, _, run in row).decode()
-        result.append((text, {attr for attr, _, _ in row}))
+        runs = []
+        for attr, _, run in row:
+            text = run.decode()
+            if runs and runs[-1][0] == attr:
+                runs[-1] = (attr, runs[-1][1] + text)
+            else:
+                runs.append((attr, text))
+        result.append(runs)
     return result
+
+
+def marked(frame, row, attrs=("match", "match focused")):
+    """The texts drawn on screen row `row` with one of `attrs`, in order."""
+    return [text for attr, text in attr_runs(frame)[row] if attr in attrs]
 
 
 def screen_lines(frame):
@@ -132,7 +158,7 @@ def search_line(frame):
 def list_lines(frame):
     """The non-blank rows below the search box, excluding any status line."""
     lines = screen_lines(frame)
-    end = len(lines) - (frame.footer.rows((SIZE[0],)) if frame.footer is not None else 0)
+    end = len(lines) - (frame.footer.rows((size(frame)[0],)) if frame.footer is not None else 0)
     return [line.strip() for line in lines[3:end] if line.strip()]
 
 
