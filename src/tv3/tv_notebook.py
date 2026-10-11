@@ -53,6 +53,10 @@ class InvalidNoteTitleError(NewNoteError):
     """Raised when creating a note with a title that cannot be used."""
 
 
+class DeleteNoteError(Error):
+    """Raised when deleting a note fails."""
+
+
 def _is_editor_temp(name: str) -> bool:
     """True for editor backup, swap and lock file names."""
     return (
@@ -515,6 +519,76 @@ class PlainTextNoteBook:
             NoteAlreadyExistsError: a note file already exists at that path.
             NewNoteError: the file could not be written.
         """
+        relpath, abspath = self._new_note_path(title, self.extension)
+        with self._notes_lock:
+            self._check_free_locked(relpath, abspath)
+            self._in_new_parents(
+                abspath, lambda: open(abspath, "x").close(), f"Could not create {relpath}"
+            )
+            on_disk = self._on_disk_relpath(relpath)
+            note = self._add_locked(on_disk, self._read_relpath(on_disk))
+        logger.debug(f"Created note {abspath}")
+        return note
+
+    def rename(self, note: PlainTextNote, new_title: str) -> PlainTextNote:
+        """Rename `note`'s file to `new_title` and return the renamed note.
+
+        `new_title` is checked as `create` checks a title, but keeps
+        `note`'s extension unless it ends in a recognised extension. Missing
+        directories are created. A rename that changes only the case of the
+        title is allowed on a case-insensitive filesystem; a rename to the
+        same title returns `note` unchanged. `note` itself keeps its old path.
+
+        Raises:
+            InvalidNoteTitleError: the title cannot be used; nothing changed.
+            NoteAlreadyExistsError: another note file exists at that path;
+                nothing changed.
+            NewNoteError: the file could not be renamed; nothing changed.
+        """
+        relpath, abspath = self._new_note_path(new_title, note.extension)
+        old_relpath = note.title + note.extension
+        if relpath == old_relpath:
+            return note
+        with self._notes_lock:
+            old_key = self._key(old_relpath)
+            if self._key(relpath) != old_key:
+                self._check_free_locked(relpath, abspath)
+            self._in_new_parents(
+                abspath,
+                lambda: os.rename(note.abspath, abspath),
+                f"Could not rename {old_relpath} to {relpath}",
+            )
+            self._notes.pop(old_key, None)
+            on_disk = self._on_disk_relpath(relpath)
+            renamed = self._add_locked(on_disk, self._read_relpath(on_disk))
+        logger.debug(f"Renamed note {note.abspath} to {abspath}")
+        return renamed
+
+    def delete(self, note: PlainTextNote) -> None:
+        """Delete `note`'s file and remove it from the notebook.
+
+        A file that is already gone is not an error.
+
+        Raises:
+            DeleteNoteError: the file could not be deleted; nothing changed.
+        """
+        relpath = note.title + note.extension
+        with self._notes_lock:
+            try:
+                os.remove(note.abspath)
+            except FileNotFoundError:
+                logger.debug(f"Note to delete was already gone: {note.abspath}")
+            except OSError as e:
+                raise DeleteNoteError(f"Could not delete {relpath}: {e.strerror or e}") from e
+            self._notes.pop(self._key(relpath), None)
+        logger.debug(f"Deleted note {note.abspath}")
+
+    def _new_note_path(self, title: str, extension: str) -> tuple[str, str]:
+        """The relative and absolute path for a note titled `title`.
+
+        `extension` is appended unless `title` ends in a recognised one.
+        Raises InvalidNoteTitleError if the title cannot be used.
+        """
         title = title.strip()
         if not title:
             raise InvalidNoteTitleError("Note title is empty")
@@ -524,7 +598,7 @@ class PlainTextNoteBook:
             raise InvalidNoteTitleError(f"Note title is an absolute path: {title}")
         if title.endswith(os.sep) or (os.altsep is not None and title.endswith(os.altsep)):
             raise InvalidNoteTitleError(f"Invalid note title: ends with a path separator: {title}")
-        typed_relpath = title if self._has_extension(title) else title + self.extension
+        typed_relpath = title if self._has_extension(title) else title + extension
         reason = self._rejection(typed_relpath)
         if reason is None and _is_editor_temp(os.path.basename(title)):
             reason = f"looks like an editor backup file: {title}"
@@ -537,30 +611,36 @@ class PlainTextNoteBook:
         reason = self._rejection(relpath) or self._length_rejection(relpath, abspath)
         if reason is not None:
             raise InvalidNoteTitleError(f"Invalid note title: {reason}")
+        return relpath, abspath
 
-        with self._notes_lock:
-            key = self._key(relpath)
-            existing = self._notes.get(key)
-            if existing is not None and not os.path.isfile(existing.abspath):
-                del self._notes[key]
-                existing = None
-            if existing is None and os.path.lexists(abspath):
-                if os.path.islink(abspath) or not os.path.isfile(abspath):
-                    raise InvalidNoteTitleError(f"Something other than a note exists at {relpath}")
-                on_disk = self._on_disk_relpath(relpath)
-                existing = self._add_locked(on_disk, self._read_relpath(on_disk))
-            if existing is not None:
-                raise NoteAlreadyExistsError(f"Note already exists: {existing.title}", existing)
-            self._write_empty_file(abspath, relpath)
+    def _check_free_locked(self, relpath: str, abspath: str) -> None:
+        """Raise unless no note exists at `relpath`. Call with the lock held.
+
+        An indexed note whose file is gone is dropped. A note file on disk
+        that is not indexed yet is registered, then reported.
+
+        Raises:
+            NoteAlreadyExistsError: a note file exists at `relpath`.
+            InvalidNoteTitleError: something other than a note file is there.
+        """
+        key = self._key(relpath)
+        existing = self._notes.get(key)
+        if existing is not None and not os.path.isfile(existing.abspath):
+            del self._notes[key]
+            existing = None
+        if existing is None and os.path.lexists(abspath):
+            if os.path.islink(abspath) or not os.path.isfile(abspath):
+                raise InvalidNoteTitleError(f"Something other than a note exists at {relpath}")
             on_disk = self._on_disk_relpath(relpath)
-            note = self._add_locked(on_disk, self._read_relpath(on_disk))
-        logger.debug(f"Created note {abspath}")
-        return note
+            existing = self._add_locked(on_disk, self._read_relpath(on_disk))
+        if existing is not None:
+            raise NoteAlreadyExistsError(f"Note already exists: {existing.title}", existing)
 
-    def _write_empty_file(self, abspath: str, relpath: str) -> None:
-        """Create `abspath` and any missing parent directories.
+    def _in_new_parents(self, abspath: str, make: Callable[[], None], failure: str) -> None:
+        """Create any missing parent directories of `abspath`, then call `make`.
 
-        On failure, removes the directories it created and raises NewNoteError.
+        On failure, removes the directories it created and raises
+        NewNoteError: `failure`, a colon and the OS error's description.
         """
         missing = []
         directory = os.path.dirname(abspath)
@@ -572,15 +652,14 @@ class PlainTextNoteBook:
             for directory in reversed(missing):
                 os.mkdir(directory)
                 created.append(directory)
-            with open(abspath, "x"):
-                pass
+            make()
         except OSError as e:
             for directory in reversed(created):
                 try:
                     os.rmdir(directory)
                 except OSError as rmdir_error:
                     logger.warning(f"Could not remove {directory}: {rmdir_error}")
-            raise NewNoteError(f"Could not create {relpath}: {e.strerror or e}") from e
+            raise NewNoteError(f"{failure}: {e.strerror or e}") from e
 
     def _fold(self, s: str) -> str:
         return s.casefold() if self._case_insensitive else s
@@ -707,6 +786,23 @@ class PlainTextNoteBook:
         with self._notes_lock:
             note = self._notes.get(self._key(relpath))
         return note is not None and note._refresh()
+
+    def _tracked_as(self, src: str, dest: str) -> bool:
+        """Whether `src` and `dest` name the same note, already tracked as `dest`.
+
+        True after `rename` changed only the case or Unicode normalisation of
+        a title: on a case-insensitive filesystem both names have one key.
+        """
+        src_relpath = self._relpath(src)
+        dest_relpath = self._relpath(dest)
+        if src_relpath is None or dest_relpath is None:
+            return False
+        key = self._key(dest_relpath)
+        if self._key(src_relpath) != key:
+            return False
+        with self._notes_lock:
+            note = self._notes.get(key)
+        return note is not None and note.title + note.extension == dest_relpath
 
     def _unregister(self, abspath: str, only_if_missing: bool = False) -> bool:
         """Stop tracking the note at `abspath`. Returns True if one was removed.
@@ -868,6 +964,8 @@ class FileEventHandler(FileSystemEventHandler):
         logger.debug(f"Detected move {src} -> {dest}")
 
         def apply() -> bool:
+            if not event.is_directory and self._notebook._tracked_as(src, dest):
+                return self._notebook._refresh(dest)
             removed = self._removed(src, event.is_directory)
             added = self._added(dest, event.is_directory)
             return removed or added
