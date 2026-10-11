@@ -965,7 +965,9 @@ class PlainTextNoteBook:
     def _refresh(self, abspath: str) -> bool:
         """Re-read the note at `abspath`, if tracked. Returns True if it changed.
 
-        A note whose file is gone is no longer tracked, which is a change.
+        A note whose file is gone is left as it was: the file was deleted or
+        moved, and the watcher's event for that removes or moves the note.
+        Dropping it here would lose a note whose file exists elsewhere.
         """
         note = self.note_at(abspath)
         if note is None:
@@ -973,8 +975,8 @@ class PlainTextNoteBook:
         try:
             return note._refresh()
         except FileNotFoundError:
-            logger.debug(f"{abspath} was gone when re-read")
-            return self._unregister(abspath, only_if_missing=True)
+            logger.debug(f"{abspath} was gone when re-read; waiting for its event")
+            return False
 
     def _same_key(self, src: str, dest: str) -> bool:
         """Whether `src` and `dest` differ only in case or Unicode normalisation.

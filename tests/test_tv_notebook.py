@@ -1246,24 +1246,50 @@ class TestFileEventHandler:
         assert any("fleeting.txt" in r.message for r in caplog.records)
 
     @pytest.mark.parametrize("event", [FileModifiedEvent, FileCreatedEvent])
-    def test_note_deleted_before_an_event_rereads_it_is_removed(
+    def test_note_gone_when_an_event_rereads_it_waits_for_its_own_event(
         self, temp_notes_dir, write_notes, unwatched_notebook, caplog, event
     ):
+        """A file that vanished under a read was deleted or moved; the event
+        for that, which follows, says which. Until then the note stays."""
         write_notes(temp_notes_dir, {"a.txt": "x", "b.txt": "y"})
         nb = unwatched_notebook(temp_notes_dir, cls=HookedNoteBook)
         changes = ChangeRecorder(nb)
         nb.on_change = changes
         path = Path(nb.path, "a.txt")
         nb.before_next_read = path.unlink
+        handler = FileEventHandler(nb)
 
         with caplog.at_level(logging.DEBUG, logger="tv3"):
-            FileEventHandler(nb).dispatch(event(str(path)))
+            handler.dispatch(event(str(path)))
+            assert titles(nb) == ["a", "b"]
+            assert changes.calls == 0
+
+            handler.on_deleted(FileDeletedEvent(str(path)))
 
         assert titles(nb) == ["b"]
         assert changes.calls == 1
         assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
 
-    def test_refresh_of_a_deleted_note_removes_it(
+    def test_move_event_for_a_file_that_has_moved_back_and_forth_keeps_the_note(
+        self, temp_notes_dir, write_notes, unwatched_notebook
+    ):
+        write_notes(temp_notes_dir, {"a.txt": "x"})
+        nb = unwatched_notebook(temp_notes_dir)
+        handler = FileEventHandler(nb)
+        a, b = os.path.join(nb.path, "a.txt"), os.path.join(nb.path, "b.txt")
+        os.rename(a, b)
+        os.rename(b, a)
+        handler.on_moved(FileMovedEvent(a, b))
+        assert titles(nb) == ["a"]
+        os.rename(a, b)
+
+        handler.on_moved(FileMovedEvent(b, a))
+        assert titles(nb) == ["a"]
+        handler.on_moved(FileMovedEvent(a, b))
+
+        assert titles(nb) == ["b"]
+
+    def test_refresh_of_a_deleted_note_leaves_it_to_the_watcher(
         self, temp_notes_dir, write_notes, unwatched_notebook, caplog
     ):
         write_notes(temp_notes_dir, {"a.txt": "x"})
@@ -1272,7 +1298,8 @@ class TestFileEventHandler:
         os.remove(note.abspath)
 
         with caplog.at_level(logging.DEBUG, logger="tv3"):
-            assert nb.refresh(note) is True
+            assert nb.refresh(note) is False
+            FileEventHandler(nb).on_deleted(FileDeletedEvent(note.abspath))
 
         assert note not in nb
         assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
