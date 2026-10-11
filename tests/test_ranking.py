@@ -1,6 +1,9 @@
 """Tests for ranking.py - fuzzy title matching, match spans and snippets."""
 
+import itertools
 import random
+import time
+import unicodedata
 
 import pytest
 from pfzy import fzy_scorer
@@ -22,9 +25,14 @@ class TestFuzzyNeedle:
             ("  ZeB \t", "zeb"),
             ("a b", "a b"),
             ("Meeting  Notes", "meeting  notes"),
+            (DOTTED_I, None),
+            (" " + DOTTED_I + " ", None),
+            (DOTTED_I + "s", "i\u0307s"),
+            ("e\u0301", None),
+            ("Cafe\u0301", "caf\u00e9"),
         ],
     )
-    def test_strips_lowercases_and_needs_two_characters(self, query, expected):
+    def test_strips_normalises_lowercases_and_needs_two_characters(self, query, expected):
         assert fuzzy_needle(query) == expected
 
 
@@ -43,13 +51,20 @@ class TestFuzzyMatch:
             ("ab", "AB", ((0, 2),)),
             ("is", DOTTED_I + "stanbul", ((0, 2),)),
             ("st", DOTTED_I + "stanbul", ((1, 3),)),
-            ("wp", "work/plan", ((0, 1), (5, 6))),
+            ("wp", "work/plan", None),
+            ("pl", "work/plan", ((5, 7),)),
+            ("ork", "work/plan", None),
+            ("pn", "a/b/plan", ((4, 5), (7, 8))),
+            ("ze", "maze/zebra", ((5, 7),)),
+            ("w/p", "work/plan", ((0, 1), (4, 6))),
+            ("k/", "work/plan", ((3, 5),)),
+            ("/pl", "work/plan", ((4, 7),)),
+            ("is", "x/" + DOTTED_I + "stanbul", ((2, 4),)),
             ("cafe", "café", None),
             ("café", "Café crème", ((0, 4),)),
             ("ba", "ab", None),
             ("zz", "zebra", None),
             ("ab", "a", None),
-            ("AB", "AXB", None),
         ],
     )
     def test_spans(self, needle, title, spans):
@@ -60,7 +75,7 @@ class TestFuzzyMatch:
             assert match is not None
             assert match[1] == spans
 
-    def test_agrees_with_pfzy_on_random_strings(self):
+    def test_matches_what_pfzy_matches_on_random_strings(self):
         rng = random.Random(0)
         alphabet = "abcAB .*?[(\\" + DOTTED_I + "\u0307é"
         for _ in range(5000):
@@ -72,15 +87,42 @@ class TestFuzzyMatch:
                 assert match is None, (needle, title)
             else:
                 assert match is not None, (needle, title)
-                assert match[0] == score
+                spans = match[1]
+                assert all(0 <= a < b <= len(title) for a, b in spans), (needle, title)
+                assert all(b < c for (_, b), (c, _) in itertools.pairwise(spans)), (needle, title)
 
     def test_non_subsequence_is_none_not_minus_infinity(self):
+        assert fzy_scorer("xy", "abc") == (float("-inf"), None)
         assert fuzzy_match("xy", "abc") is None
 
+    @pytest.mark.parametrize(
+        ("needle", "title"),
+        [
+            ("a" * 8 + "b", "a" * 60),
+            ("a" * 20 + "b", "a" * 250),
+            ("ab" * 10 + "c", "ab" * 120),
+            ("a b c d e f g h z", "a b c d e f g h " * 15),
+            ("aaaaaaaab", "a" * 60 + "b"),
+        ],
+    )
+    def test_pathological_titles_take_linear_time(self, needle, title):
+        start = time.perf_counter()
+        for _ in range(10):
+            fuzzy_match(needle, title)
+        assert time.perf_counter() - start < 1.0
+
+    def test_keeps_the_capital_letter_bonus(self):
+        camel = fuzzy_match("mn", "MeetingNotes")
+        flat = fuzzy_match("mn", "meetingnotes")
+        assert camel is not None
+        assert flat is not None
+        assert camel[1] == ((0, 1), (7, 8))
+        assert camel[0] > flat[0]
+
     def test_uppercase_title_matches_lowercase_needle(self):
-        # pfzy scores an uppercase needle against a lowercase title as
-        # (-inf, [0, 0]); titles are lowercased so this never arises.
-        assert fuzzy_match("ab", "AXB") == fuzzy_match("ab", "axb")
+        match = fuzzy_match("ab", "AXB")
+        assert match is not None
+        assert match[1] == ((0, 1), (2, 3))
 
     @pytest.mark.parametrize(
         ("needle", "better", "worse"),
@@ -169,6 +211,8 @@ class TestSnippet:
             ("plan", "\tthe\tbudget\t", ["budget"], ("the budget", ((4, 10),))),
             ("plan", "   indented budget   ", ["budget"], ("indented budget", ((9, 15),))),
             ("plan", "esc\x1b[31mbudget", ["budget"], ("esc [31mbudget", ((8, 14),))),
+            ("plan", "csi\x9b31mbudget", ["budget"], ("csi 31mbudget", ((7, 13),))),
+            ("plan", "c1\x80\x9fbudget\x7f", ["budget"], ("c1  budget ", ((4, 10),))),
             ("plan", "x" + DOTTED_I + "budget", ["budget"], ("x" + DOTTED_I + "budget", ((2, 8),))),
             ("plan", DOTTED_I + "i budget", ["i"], (DOTTED_I + "i budget", ((0, 2),))),
         ],
@@ -205,6 +249,16 @@ class TestSnippet:
     )
     def test_window(self, line, word, width, expected):
         assert snippet("title", line, [word], width=width) == expected
+
+    @pytest.mark.parametrize("pad", range(6))
+    def test_window_does_not_start_with_a_combining_mark(self, pad):
+        line = "x" * pad + "e\u0301" * 30 + "budget" + "y" * 30
+        text, spans = snippet("title", line, ["budget"], width=12)
+
+        assert text.startswith("…")
+        assert not unicodedata.combining(text[1])
+        assert len(text) <= 12
+        assert [text[a:b] for a, b in spans] == ["budget"]
 
     def test_window_spans_include_every_word_and_clip_at_edges(self):
         line = "alpha beta " + "pad " * 10 + "budget " + "pad " * 10 + "alphabet"

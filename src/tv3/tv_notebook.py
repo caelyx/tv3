@@ -1,5 +1,6 @@
 """Persistent note storage and search."""
 
+import errno
 import logging
 import os
 import stat
@@ -24,6 +25,16 @@ WATCHDOG_STOP_TIMEOUT = 5  # seconds
 EDITOR_TEMP_SUFFIXES = ("~", ".swp", ".swx")
 
 MAX_INDEXED_BYTES = 1024 * 1024
+
+# os.link errors meaning the filesystem cannot hard-link this file here.
+_LINK_UNSUPPORTED = {
+    errno.EPERM,
+    errno.ENOTSUP,
+    errno.EOPNOTSUPP,
+    errno.EXDEV,
+    errno.EMLINK,
+    errno.ENOSYS,
+}
 
 
 class Error(Exception):
@@ -68,6 +79,10 @@ def _is_editor_temp(name: str) -> bool:
 
 def _is_inside(path: str, directory: str) -> bool:
     return path == directory or path.startswith(directory + os.sep)
+
+
+def _nfc(s: str) -> str:
+    return unicodedata.normalize("NFC", s)
 
 
 def _swap_ascii_case(name: str) -> str:
@@ -145,7 +160,8 @@ class _Stat(NamedTuple):
 class _Contents(NamedTuple):
     """A note file as it was when last read.
 
-    `text` is the title, a newline and the contents; `folded` is the
+    `text` is the title, a newline and the contents, all in Unicode
+    normalisation form NFC; `folded` is the
     lowercased title and the lowercased contents, joined the same way, and is
     `text` itself when lowercasing changes nothing. A search word never
     contains whitespace, so it occurs in `text` exactly when it occurs in the
@@ -161,9 +177,12 @@ class _Contents(NamedTuple):
 class PlainTextNote:
     """A note, stored as a plain text file on disk.
 
-    `contents` and `mtime` come from an in-memory copy of the file, which
-    the notebook passes in as `cached` or which is read on first use. The
-    notebook re-reads it when its watcher reports a change.
+    `title` is the file's path relative to the notebook, without its
+    extension, in Unicode normalisation form NFC; the file's name on disk
+    may be in another form. `contents` and `mtime` come from an in-memory
+    copy of the file, which the notebook passes in as `cached` or which is
+    read on first use. The notebook re-reads it when its watcher reports a
+    change.
     """
 
     def __init__(
@@ -173,9 +192,10 @@ class PlainTextNote:
         extension: str,
         cached: _Stat | _Contents | None = None,
     ):
-        self._title = title
+        self._relpath = title + extension
+        self._title = _nfc(title)
         self._extension = extension
-        self._abspath = os.path.join(notebook.path, title + extension)
+        self._abspath = os.path.join(notebook.path, self._relpath)
         self._notebook = notebook
         self._lock = notebook._notes_lock
         self._cached = cached
@@ -194,7 +214,7 @@ class PlainTextNote:
 
     @property
     def contents(self) -> str:
-        """The first MAX_INDEXED_BYTES bytes of the note file, decoded as UTF-8."""
+        """The first MAX_INDEXED_BYTES bytes of the note file, decoded as UTF-8, in NFC."""
         return self._loaded().text[len(self._title) + 1 :]
 
     @property
@@ -276,7 +296,10 @@ class Result:
 
     Exact-match title spans and the snippet are worked out on first access,
     from the note's contents at that time, so a search costs nothing for
-    results that are never shown.
+    results that are never shown. If the contents changed since `find`, the
+    snippet reflects the new contents and is None if the query no longer
+    matches them. These properties are not thread-safe: read them from one
+    thread, the UI thread.
     """
 
     note: PlainTextNote
@@ -319,10 +342,12 @@ def brute_force_search(notebook, query):
 
     Every word must occur in the note's title or contents (AND). A word that
     is all lowercase matches case-insensitively, any other word matches
-    case-sensitively. Searches the notes' cached contents; it reads only
-    notes that have not been read yet.
+    case-sensitively. The query is put in Unicode normalisation form NFC, as
+    titles and contents are, so text matches whatever form it was typed or
+    stored in. Searches the notes' cached contents; it reads only notes that
+    have not been read yet.
     """
-    words = [(word, word.islower()) for word in query.split()]
+    words = [(word, word.islower()) for word in _nfc(query).split()]
     if not words:
         return list(notebook)
     matching_notes = []
@@ -441,7 +466,11 @@ class PlainTextNoteBook:
         """The notes matching `query`, best first, with what to highlight.
 
         The notes are those `search` returns plus those whose title fuzzy
-        matches the whole query (see `ranking.fuzzy_needle`). An empty query
+        matches the whole query (see `ranking.fuzzy_needle`). The fuzzy match
+        is against the title's last path component, so a folder name does
+        not fuzzy-match the notes in it, unless the query contains a path
+        separator; then it is against the whole title. The query is put in
+        Unicode normalisation form NFC, like titles and contents. An empty query
         gives every note, newest first. Otherwise fuzzy title matches come
         first, best score first, then the other notes newest first. Ties go
         to the newer note.
@@ -451,6 +480,7 @@ class PlainTextNoteBook:
         whose title lacks a query word get a snippet of `snippet_width`
         characters at most (see `ranking.snippet`).
         """
+        query = _nfc(query)
         words = tuple(query.split())
         exact = self.search(query)
         needle = ranking.fuzzy_needle(query)
@@ -489,7 +519,8 @@ class PlainTextNoteBook:
         if len(data) > MAX_INDEXED_BYTES:
             data = data[:MAX_INDEXED_BYTES]
             self._log_truncated(abspath)
-        contents = data.decode("utf-8", errors="replace")
+        contents = _nfc(data.decode("utf-8", errors="replace"))
+        title = _nfc(title)
         text = title + "\n" + contents
         folded = title.lower() + "\n" + contents.lower()
         return _Contents(mtime, text, text if folded == text else folded)
@@ -545,29 +576,46 @@ class PlainTextNoteBook:
         `new_title` is checked as `create` checks a title, but keeps
         `note`'s extension unless it ends in a recognised extension. Missing
         directories are created. A rename that changes only the case of the
-        title is allowed on a case-insensitive filesystem; a rename to the
-        same title returns `note` unchanged. `note` itself keeps its old path.
+        file name is allowed on a case-insensitive filesystem; changing only
+        the case of a folder name is not. A rename to the same title returns
+        `note` unchanged. `note` itself keeps its old path.
+
+        An existing file is never replaced: the file is hard-linked to its
+        new name, which fails if that name exists, and then unlinked from
+        its old one. Where hard links are not supported, the target is
+        checked and the file then renamed, so a file that another process
+        creates at the target in between is replaced. A rename that changes
+        only case or Unicode normalisation renames the file in place.
 
         Raises:
             InvalidNoteTitleError: the title cannot be used; nothing changed.
             NoteAlreadyExistsError: another note file exists at that path;
                 nothing changed.
-            NewNoteError: the file could not be renamed; nothing changed.
+            NewNoteError: `note` is not the notebook's current note for its
+                file, or the file could not be renamed; nothing changed.
         """
         relpath, abspath = self._new_note_path(new_title, note.extension)
-        old_relpath = note.title + note.extension
-        if relpath == old_relpath:
-            return note
+        old_relpath = note._relpath
+        failure = f"Could not rename {old_relpath} to {relpath}"
         with self._notes_lock:
             old_key = self._key(old_relpath)
-            if self._key(relpath) != old_key:
+            if self._notes.get(old_key) is not note:
+                raise NewNoteError(f"{note.title} has changed; refresh and try again")
+            if _nfc(relpath) == _nfc(old_relpath):
+                return note
+            if self._key(relpath) == old_key:
+                if _nfc(os.path.dirname(relpath)) != _nfc(os.path.dirname(old_relpath)):
+                    raise InvalidNoteTitleError(
+                        "Invalid note title: can't change only the letter case of a folder"
+                        f" name: {relpath}"
+                    )
+                self._in_new_parents(abspath, lambda: os.rename(note.abspath, abspath), failure)
+            else:
                 self._check_free_locked(relpath, abspath)
-            self._in_new_parents(
-                abspath,
-                lambda: os.rename(note.abspath, abspath),
-                f"Could not rename {old_relpath} to {relpath}",
-            )
-            self._notes.pop(old_key, None)
+                self._in_new_parents(
+                    abspath, lambda: self._move_locked(note.abspath, relpath, abspath), failure
+                )
+            del self._notes[old_key]
             on_disk = self._on_disk_relpath(relpath)
             renamed = self._add_locked(on_disk, self._read_relpath(on_disk))
         logger.debug(f"Renamed note {note.abspath} to {abspath}")
@@ -579,10 +627,17 @@ class PlainTextNoteBook:
         A file that is already gone is not an error.
 
         Raises:
-            DeleteNoteError: the file could not be deleted; nothing changed.
+            DeleteNoteError: `note` is not the notebook's current note for its
+                file, or the file could not be deleted; nothing changed.
         """
-        relpath = note.title + note.extension
+        relpath = note._relpath
         with self._notes_lock:
+            current = self._notes.get(self._key(relpath))
+            if current is None and not os.path.lexists(note.abspath):
+                logger.debug(f"Note to delete was already gone: {note.abspath}")
+                return
+            if current is not note:
+                raise DeleteNoteError(f"{note.title} has changed; refresh and try again")
             try:
                 os.remove(note.abspath)
             except FileNotFoundError:
@@ -645,11 +700,45 @@ class PlainTextNoteBook:
         if existing is not None:
             raise NoteAlreadyExistsError(f"Note already exists: {existing.title}", existing)
 
+    def _move_locked(self, src: str, relpath: str, abspath: str) -> None:
+        """Move the file `src` to `abspath` unless something exists there.
+
+        Call with the lock held and `abspath`'s directory existing.
+
+        Raises:
+            NoteAlreadyExistsError: a note file exists at `relpath`.
+            InvalidNoteTitleError: something other than a note file is there.
+            OSError: the file could not be moved.
+        """
+        try:
+            os.link(src, abspath, follow_symlinks=False)
+        except FileExistsError:
+            self._check_free_locked(relpath, abspath)
+            raise
+        except OSError as e:
+            if e.errno not in _LINK_UNSUPPORTED:
+                raise
+            logger.debug(f"Cannot hard-link {src} ({e}); renaming it instead")
+            self._check_free_locked(relpath, abspath)
+            os.rename(src, abspath)
+            return
+        try:
+            os.unlink(src)
+        except OSError:
+            try:
+                os.unlink(abspath)
+            except OSError as unlink_error:
+                logger.error(
+                    f"Could not remove {abspath} after failing to move {src}: {unlink_error}"
+                )
+            raise
+
     def _in_new_parents(self, abspath: str, make: Callable[[], None], failure: str) -> None:
         """Create any missing parent directories of `abspath`, then call `make`.
 
-        On failure, removes the directories it created and raises
-        NewNoteError: `failure`, a colon and the OS error's description.
+        If `make` raises, removes the directories it created. An OSError
+        becomes NewNoteError: `failure`, a colon and the OS error's
+        description; anything else propagates.
         """
         missing = []
         directory = os.path.dirname(abspath)
@@ -662,13 +751,15 @@ class PlainTextNoteBook:
                 os.mkdir(directory)
                 created.append(directory)
             make()
-        except OSError as e:
+        except BaseException as e:
             for directory in reversed(created):
                 try:
                     os.rmdir(directory)
                 except OSError as rmdir_error:
                     logger.warning(f"Could not remove {directory}: {rmdir_error}")
-            raise NewNoteError(f"{failure}: {e.strerror or e}") from e
+            if isinstance(e, OSError):
+                raise NewNoteError(f"{failure}: {e.strerror or e}") from e
+            raise
 
     def _fold(self, s: str) -> str:
         return s.casefold() if self._case_insensitive else s
@@ -796,22 +887,29 @@ class PlainTextNoteBook:
             note = self._notes.get(self._key(relpath))
         return note is not None and note._refresh()
 
+    def _same_key(self, src: str, dest: str) -> bool:
+        """Whether `src` and `dest` differ only in case or Unicode normalisation.
+
+        On a case-insensitive filesystem such paths name the same file.
+        """
+        src_relpath = self._relpath(src)
+        dest_relpath = self._relpath(dest)
+        if src_relpath is None or dest_relpath is None:
+            return False
+        return self._key(src_relpath) == self._key(dest_relpath)
+
     def _tracked_as(self, src: str, dest: str) -> bool:
         """Whether `src` and `dest` name the same note, already tracked as `dest`.
 
         True after `rename` changed only the case or Unicode normalisation of
         a title: on a case-insensitive filesystem both names have one key.
         """
-        src_relpath = self._relpath(src)
         dest_relpath = self._relpath(dest)
-        if src_relpath is None or dest_relpath is None:
-            return False
-        key = self._key(dest_relpath)
-        if self._key(src_relpath) != key:
+        if dest_relpath is None or not self._same_key(src, dest):
             return False
         with self._notes_lock:
-            note = self._notes.get(key)
-        return note is not None and note.title + note.extension == dest_relpath
+            note = self._notes.get(self._key(dest_relpath))
+        return note is not None and note._relpath == dest_relpath
 
     def _unregister(self, abspath: str, only_if_missing: bool = False) -> bool:
         """Stop tracking the note at `abspath`. Returns True if one was removed.
@@ -973,9 +1071,14 @@ class FileEventHandler(FileSystemEventHandler):
         logger.debug(f"Detected move {src} -> {dest}")
 
         def apply() -> bool:
-            if not event.is_directory and self._notebook._tracked_as(src, dest):
-                return self._notebook._refresh(dest)
-            removed = self._removed(src, event.is_directory)
+            nb = self._notebook
+            if not event.is_directory and nb._tracked_as(src, dest):
+                return nb._refresh(dest)
+            # Events arrive after the fact: a source that exists again stays,
+            # unless it exists only as the destination under another case.
+            removed = self._removed(
+                src, event.is_directory, only_if_missing=not nb._same_key(src, dest)
+            )
             added = self._added(dest, event.is_directory)
             return removed or added
 

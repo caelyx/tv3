@@ -97,14 +97,23 @@ class HookedNoteBook(tv_notebook.PlainTextNoteBook):
     The background read waits for `warmer_gate` to be set or, if it is None,
     for the notebook to be closed; `warmer_finished` is set when it ends.
     `during_next_read`, if set, is called once, after the next note file has
-    been read but before the read is stored.
+    been read but before the read is stored. `before_next_write`, if set, is
+    called once, after `create` or `rename` has checked the target path but
+    before it writes, as another process could.
     """
 
     def __init__(self, *args, warmer_gate=None, **kwargs):
         self.warmer_gate = warmer_gate
         self.warmer_finished = threading.Event()
         self.during_next_read = None
+        self.before_next_write = None
         super().__init__(*args, **kwargs)
+
+    def _in_new_parents(self, abspath, make, failure):
+        action, self.before_next_write = self.before_next_write, None
+        if action is not None:
+            action()
+        super()._in_new_parents(abspath, make, failure)
 
     def _read_all(self):
         gate = self._closed if self.warmer_gate is None else self.warmer_gate
@@ -862,6 +871,102 @@ class TestRename:
 
         assert titles(nb) == ["Foo"]
 
+    @pytest.mark.parametrize(
+        ("make_target", "error"),
+        [
+            (lambda path: path.write_text("EXTERNAL"), NoteAlreadyExistsError),
+            (lambda path: path.mkdir(), InvalidNoteTitleError),
+        ],
+    )
+    def test_target_created_during_rename_is_not_overwritten(
+        self, temp_notes_dir, unwatched_notebook, make_target, error
+    ):
+        Path(temp_notes_dir, "a.txt").write_text("A")
+        nb = unwatched_notebook(temp_notes_dir, cls=HookedNoteBook)
+        (a,) = list(nb)
+        target = Path(nb.path, "b.txt")
+        nb.before_next_write = lambda: make_target(target)
+
+        with pytest.raises(error):
+            nb.rename(a, "b")
+
+        assert Path(a.abspath).read_text() == "A"
+        assert sorted(os.listdir(nb.path)) == ["a.txt", "b.txt"]
+        assert a in nb
+        if error is NoteAlreadyExistsError:
+            assert target.read_text() == "EXTERNAL"
+            assert titles(nb) == ["a", "b"]
+        else:
+            assert target.is_dir()
+            assert titles(nb) == ["a"]
+
+    def test_target_created_during_rename_into_new_directory_removes_nothing_of_it(
+        self, temp_notes_dir, unwatched_notebook
+    ):
+        Path(temp_notes_dir, "a.txt").write_text("A")
+        nb = unwatched_notebook(temp_notes_dir, cls=HookedNoteBook)
+        (a,) = list(nb)
+
+        def external_write():
+            os.mkdir(Path(nb.path, "sub"))
+            Path(nb.path, "sub", "b.txt").write_text("EXTERNAL")
+
+        nb.before_next_write = external_write
+
+        with pytest.raises(NoteAlreadyExistsError) as exc_info:
+            nb.rename(a, "sub/b")
+
+        assert exc_info.value.note.title == os.path.join("sub", "b")
+        assert Path(nb.path, "sub", "b.txt").read_text() == "EXTERNAL"
+        assert Path(a.abspath).read_text() == "A"
+
+    def test_stale_note_is_not_renamed(self, temp_notes_dir, unwatched_notebook):
+        Path(temp_notes_dir, "a.txt").write_text("A")
+        nb = unwatched_notebook(temp_notes_dir)
+        (a,) = list(nb)
+        b = nb.rename(a, "b")
+        new_a = nb.create("a")
+        Path(new_a.abspath).write_text("NEW A")
+
+        with pytest.raises(NewNoteError, match="changed; refresh and try again"):
+            nb.rename(a, "c")
+        nb.rename(b, "c")
+        with pytest.raises(NewNoteError, match="changed; refresh and try again"):
+            nb.rename(b, "d")
+
+        assert sorted(os.listdir(nb.path)) == ["a.txt", "c.txt"]
+        assert Path(new_a.abspath).read_text() == "NEW A"
+        assert titles(nb) == ["a", "c"]
+        assert new_a in nb
+
+    def test_note_not_from_the_index_is_not_renamed(self, temp_notes_dir, unwatched_notebook):
+        Path(temp_notes_dir, "a.txt").write_text("A")
+        nb = unwatched_notebook(temp_notes_dir)
+        other = tv_notebook.PlainTextNote("a", nb, ".txt")
+
+        with pytest.raises(NewNoteError, match="changed; refresh and try again"):
+            nb.rename(other, "b")
+
+        assert os.listdir(nb.path) == ["a.txt"]
+
+    def test_case_only_change_of_a_folder_is_rejected(self, temp_notes_dir, unwatched_notebook):
+        if not filesystem_is_case_insensitive(temp_notes_dir):
+            pytest.skip("needs a case-insensitive filesystem")
+        os.mkdir(Path(temp_notes_dir, "sub"))
+        Path(temp_notes_dir, "sub", "n.txt").write_text("x")
+        nb = unwatched_notebook(temp_notes_dir)
+        (note,) = list(nb)
+
+        for title in ["Sub/n", "SUB/N"]:
+            with pytest.raises(InvalidNoteTitleError, match="letter case of a folder name"):
+                nb.rename(note, title)
+
+        assert os.listdir(nb.path) == ["sub"]
+        assert list(nb) == [note]
+        renamed = nb.rename(note, "sub/N")
+        assert renamed.title == os.path.join("sub", "N")
+        assert os.listdir(Path(nb.path, "sub")) == ["N.txt"]
+
 
 class TestDelete:
     def test_removes_file_and_note(self, populated_notes_dir, unwatched_notebook):
@@ -941,6 +1046,33 @@ class TestDelete:
 
         assert os.path.isdir(note.abspath)
 
+    def test_stale_note_does_not_delete_a_newer_note(self, temp_notes_dir, unwatched_notebook):
+        Path(temp_notes_dir, "a.txt").write_text("A")
+        nb = unwatched_notebook(temp_notes_dir)
+        (a,) = list(nb)
+        nb.rename(a, "b")
+        new_a = nb.create("a")
+        Path(new_a.abspath).write_text("NEW A")
+
+        with pytest.raises(DeleteNoteError, match="changed; refresh and try again"):
+            nb.delete(a)
+
+        assert sorted(os.listdir(nb.path)) == ["a.txt", "b.txt"]
+        assert Path(new_a.abspath).read_text() == "NEW A"
+        assert new_a in nb
+
+    def test_stale_note_does_not_delete_an_unindexed_file(self, temp_notes_dir, unwatched_notebook):
+        Path(temp_notes_dir, "a.txt").write_text("A")
+        nb = unwatched_notebook(temp_notes_dir)
+        (a,) = list(nb)
+        nb.delete(a)
+        Path(a.abspath).write_text("NEW A")
+
+        with pytest.raises(DeleteNoteError, match="changed; refresh and try again"):
+            nb.delete(a)
+
+        assert Path(a.abspath).read_text() == "NEW A"
+
     def test_watcher_events_afterwards_change_nothing(
         self, populated_notes_dir, unwatched_notebook
     ):
@@ -991,6 +1123,42 @@ class TestRenameAndDeleteWithRealWatcher:
         assert next(iter(nb)) is new
         assert new.title == new_title
         assert Path(new.abspath).read_text() == "x"
+
+    @pytest.mark.parametrize("new_title", ["b", "sub/b", "A"])
+    def test_rename_never_shows_a_transient_index(
+        self, temp_notes_dir, notebook, wait_until, new_title
+    ):
+        Path(temp_notes_dir, "a.txt").write_text("x")
+        Path(temp_notes_dir, "other.txt").write_text("y")
+        nb = notebook(temp_notes_dir)
+        self.settle(nb, wait_until)
+        note = next(n for n in nb if n.title == "a")
+        snapshots = []
+        nb.on_change = lambda: snapshots.append([t for t in titles(nb) if t != "zz-sentinel"])
+
+        new = nb.rename(note, new_title)
+        self.settle(nb, wait_until)
+
+        assert all(snapshot == sorted([new_title, "other"]) for snapshot in snapshots)
+        assert next(n for n in nb if n.title == new_title) is new
+
+    def test_external_renames_back_and_forth_never_drop_the_note(
+        self, temp_notes_dir, notebook, wait_until
+    ):
+        Path(temp_notes_dir, "a.txt").write_text("x")
+        nb = notebook(temp_notes_dir)
+        self.settle(nb, wait_until)
+        a, b = os.path.join(nb.path, "a.txt"), os.path.join(nb.path, "b.txt")
+        snapshots = []
+        nb.on_change = lambda: snapshots.append([t for t in titles(nb) if t != "zz-sentinel"])
+
+        for _ in range(10):
+            os.rename(a, b)
+            os.rename(b, a)
+        self.settle(nb, wait_until)
+
+        assert all("a" in snapshot for snapshot in snapshots), snapshots
+        assert titles(nb) == ["a"]
 
     def test_delete(self, populated_notes_dir, notebook, wait_until):
         nb = notebook(populated_notes_dir)
@@ -1119,6 +1287,36 @@ class TestFileEventHandler:
         FileEventHandler(nb).on_moved(FileMovedEvent(src, dest))
 
         assert titles(nb) == ["done", "first_note", "meeting_notes", "second_note"]
+
+    def test_moved_source_that_exists_again_is_kept(self, temp_notes_dir, unwatched_notebook):
+        Path(temp_notes_dir, "a.txt").write_text("x")
+        nb = unwatched_notebook(temp_notes_dir)
+        (note,) = list(nb)
+        recorder = ChangeRecorder(nb)
+        nb.on_change = recorder
+
+        deliver(nb, [("on_moved", FileMovedEvent(note.abspath, os.path.join(nb.path, "b.txt")))])
+
+        assert list(nb) == [note]
+        assert recorder.calls == 0
+
+    def test_moved_directory_whose_source_exists_again_keeps_its_notes(
+        self, nested_notes_dir, unwatched_notebook
+    ):
+        nb = unwatched_notebook(nested_notes_dir)
+        before = titles(nb)
+
+        deliver(
+            nb,
+            [
+                (
+                    "on_moved",
+                    DirMovedEvent(os.path.join(nb.path, "work"), os.path.join(nb.path, "w")),
+                )
+            ],
+        )
+
+        assert titles(nb) == before
 
     def test_moved_into_excluded_directory(self, populated_notes_dir, unwatched_notebook):
         nb = unwatched_notebook(populated_notes_dir, exclude=["archive"])
@@ -1519,6 +1717,39 @@ class TestFind:
         assert len(wide.snippet) == SNIPPET_WIDTH
         assert len(narrow.snippet) == 20
         assert [narrow.snippet[a:b] for a, b in narrow.snippet_spans] == ["budget"]
+
+    def test_fuzzy_matches_the_last_path_component_unless_query_has_a_separator(
+        self, temp_notes_dir, write_notes, unwatched_notebook
+    ):
+        os.mkdir(Path(temp_notes_dir, "work"))
+        write_notes(temp_notes_dir, {"work/zebra.txt": "x", "wonky.txt": "y"})
+        nb = unwatched_notebook(temp_notes_dir)
+
+        found = [(r.note.title, r.title_spans) for r in nb.find("wo")]
+        nested = [(r.note.title, r.title_spans) for r in nb.find("ze")]
+        full = [(r.note.title, r.title_spans) for r in nb.find("k/z")]
+
+        assert found == [("wonky", ((0, 2),)), (os.path.join("work", "zebra"), ((0, 2),))]
+        assert nested == [(os.path.join("work", "zebra"), ((5, 7),))]
+        assert full == [(os.path.join("work", "zebra"), ((3, 6),))]
+
+    def test_nfd_title_and_contents_match_nfc_query(self, temp_notes_dir, unwatched_notebook):
+        nfd = unicodedata.normalize("NFD", "café menu")
+        Path(temp_notes_dir, nfd + ".txt").write_text(
+            unicodedata.normalize("NFD", "crème brûlée"), encoding="utf-8"
+        )
+        nb = unwatched_notebook(temp_notes_dir)
+
+        (by_title,) = nb.find("café")
+        (by_contents,) = nb.find("brûlée")
+
+        assert by_title.note.title == "café menu"
+        assert by_title.title_spans == ((0, 4),)
+        assert by_contents.snippet == "crème brûlée"
+        assert by_contents.snippet_spans == ((6, 12),)
+        assert by_title.note.contents == "crème brûlée"
+        assert [n.title for n in nb.search(NFD_CAFE)] == ["café menu"]
+        assert [n.title for n in nb.search("café")] == ["café menu"]
 
     def test_sees_watcher_changes(self, nb):
         path = Path(nb.path, "zebra.txt")
@@ -2096,7 +2327,8 @@ class TestUnicodeNormalization:
         with pytest.raises(NoteAlreadyExistsError) as exc_info:
             nb.create(NFC_CAFE)
 
-        assert exc_info.value.note.title == NFD_CAFE
+        assert exc_info.value.note.title == NFC_CAFE
+        assert exc_info.value.note.abspath == os.path.join(nb.path, NFD_CAFE + ".txt")
         assert len(nb) == 1
         assert os.listdir(nb.path) == [NFD_CAFE + ".txt"]
 
@@ -2111,8 +2343,8 @@ class TestUnicodeNormalization:
         with pytest.raises(NoteAlreadyExistsError) as exc_info:
             nb.create(NFC_CAFE)
 
-        assert exc_info.value.note.title == NFD_CAFE
-        assert titles(nb) == [NFD_CAFE]
+        assert exc_info.value.note.abspath == os.path.join(nb.path, NFD_CAFE + ".txt")
+        assert titles(nb) == [NFC_CAFE]
 
     def test_watcher_event_in_other_normalization_is_not_a_duplicate(
         self, temp_notes_dir, unwatched_notebook
@@ -2124,7 +2356,24 @@ class TestUnicodeNormalization:
 
         FileEventHandler(nb).on_created(FileCreatedEvent(os.path.join(nb.path, NFC_CAFE + ".txt")))
 
-        assert titles(nb) == [NFD_CAFE]
+        assert [n.abspath for n in nb] == [os.path.join(nb.path, NFD_CAFE + ".txt")]
+
+    def test_nfd_note_has_nfc_title_and_can_be_renamed_and_deleted(
+        self, temp_notes_dir, unwatched_notebook
+    ):
+        Path(temp_notes_dir, NFD_CAFE + ".txt").write_text("x")
+        Path(temp_notes_dir, NFD_CAFE + " 2.txt").write_text("y")
+        nb = unwatched_notebook(temp_notes_dir)
+        first = next(n for n in nb if n.title == NFC_CAFE)
+        second = next(n for n in nb if n.title == NFC_CAFE + " 2")
+
+        assert nb.rename(first, NFC_CAFE) is first
+        renamed = nb.rename(first, "menu")
+        nb.delete(second)
+
+        assert os.listdir(nb.path) == ["menu.txt"]
+        assert list(nb) == [renamed]
+        assert Path(renamed.abspath).read_text() == "x"
 
     def test_created_note_uses_on_disk_directory_name(self, temp_notes_dir, unwatched_notebook):
         if not filesystem_is_case_insensitive(temp_notes_dir):

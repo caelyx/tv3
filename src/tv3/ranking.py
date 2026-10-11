@@ -9,10 +9,14 @@ other word matches case-sensitively, exactly as `brute_force_search` does.
 Case-insensitive matching compares against `str.lower()`, which can turn one
 character into two (U+0130 becomes "i" and a combining dot); indices found
 in the lowercased text are mapped back to the original text.
+
+Callers pass titles and contents in Unicode normalisation form NFC;
+`fuzzy_needle` puts the query in NFC.
 """
 
-import functools
+import os
 import re
+import unicodedata
 from collections.abc import Iterable, Sequence
 
 from pfzy import fzy_scorer
@@ -27,41 +31,41 @@ ELLIPSIS = "…"
 
 _LINE_BREAKS = "\n\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029"
 _LINE_BREAK = re.compile(f"[{re.escape(_LINE_BREAKS)}]")
-_CONTROL_TO_SPACE = dict.fromkeys([*range(0x20), 0x7F], " ")
+_CONTROL_TO_SPACE = {c: " " for c in range(0xA0) if unicodedata.category(chr(c)) == "Cc"}
 
 
 def fuzzy_needle(query: str) -> str | None:
-    """The fuzzy-match needle for `query`: stripped and lowercased.
+    """The fuzzy-match needle for `query`: NFC-normalised, stripped and lowercased.
 
-    None when it is shorter than MIN_FUZZY_LENGTH characters. Inner spaces
-    are kept and match spaces in titles.
+    None when the stripped query is shorter than MIN_FUZZY_LENGTH
+    characters, counted before lowercasing. Inner spaces are kept and match
+    spaces in titles.
     """
-    needle = query.strip().lower()
-    return needle if len(needle) >= MIN_FUZZY_LENGTH else None
+    stripped = unicodedata.normalize("NFC", query).strip()
+    return stripped.lower() if len(stripped) >= MIN_FUZZY_LENGTH else None
 
 
 def fuzzy_match(needle: str, title: str) -> tuple[float, tuple[Span, ...]] | None:
     """fzy score and matched spans of `needle` in `title`, or None if no match.
 
-    `needle` must be lowercase (see `fuzzy_needle`); `title` is lowercased
-    here. Higher scores are better matches; a title equal to the needle
-    scores infinity.
+    `needle` must be lowercase (see `fuzzy_needle`) and matches `title`
+    case-insensitively. Unless `needle` contains a path separator, it is
+    matched against the title's last path component only, so folder names
+    do not match; spans always index the whole title. Higher scores are
+    better matches; a name equal to the needle scores infinity.
     """
-    lowered = title.lower()
-    if not _subsequence_pattern(needle).search(lowered):
-        return None
-    score, positions = fzy_scorer(needle, lowered)
+    offset = 0 if os.sep in needle else title.rfind(os.sep) + 1
+    name = title[offset:]
+    lowered = name.lower()
+    # pfzy lowercases the haystack itself and gives capitals after a
+    # lowercase letter a bonus, so pass the original case when indices agree.
+    same_length = len(lowered) == len(name)
+    score, positions = fzy_scorer(needle, name if same_length else lowered)
     if score == float("-inf") or positions is None:
         return None
-    if len(lowered) != len(title):
-        positions = sorted({_floor_index(title, p) for p in positions})
-    return score, _merge((p, p + 1) for p in positions)
-
-
-@functools.lru_cache(maxsize=8)
-def _subsequence_pattern(needle: str) -> re.Pattern[str]:
-    """A regex that finds `needle`'s characters in order, the test fzy_scorer starts with."""
-    return re.compile(".*?".join(map(re.escape, needle)), re.DOTALL)
+    if not same_length:
+        positions = sorted({_floor_index(name, p) for p in positions})
+    return score, _merge((offset + p, offset + p + 1) for p in positions)
 
 
 def word_spans(text: str, words: Sequence[str]) -> tuple[Span, ...]:
@@ -93,8 +97,10 @@ def snippet(
     line of `contents` containing that word, without leading and trailing
     whitespace, cut to at most `width` characters around the word's first
     occurrence. ELLIPSIS marks each cut end and counts towards `width`.
-    Control characters such as tabs become spaces. The spans cover every
-    word of `words` in the excerpt, clipped to it.
+    Control characters (Unicode category Cc, such as tabs and C1 controls)
+    become spaces. A cut never leaves a combining mark at the start of the
+    excerpt. The spans cover every word of `words` in the excerpt, clipped
+    to it.
     """
     word = next((w for w in words if not contains(title, w)), None)
     if word is None:
@@ -111,6 +117,8 @@ def snippet(
     line = stripped.rstrip()
 
     begin, end = _window(len(line), start - line_start, width)
+    while 0 < begin < end and unicodedata.combining(line[begin]):
+        begin += 1
     prefix = ELLIPSIS if begin > 0 else ""
     suffix = ELLIPSIS if end < len(line) else ""
     text = prefix + line[begin:end].translate(_CONTROL_TO_SPACE) + suffix
