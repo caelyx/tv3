@@ -36,15 +36,19 @@ The codebase is the `tv3` package in `src/tv3/`, organized into four modules
 4. **src/tv3/ranking.py** - Pure functions for ranking and highlighting
    - Fuzzy title matching with pfzy's fzy scorer
    - Match spans for highlighting, and the matching-line snippet shown under a note
+   - Snippets are cut to a width in terminal columns, measured with wcwidth as urwid measures them, so wide characters (CJK, emoji) never push the match or the closing `…` off-screen
+   - `printable()`: Replaces control characters with spaces (used for snippets and the preview)
 
 ### Key Architecture Notes
 
 - The notebook automatically watches the notes directory for external changes using watchdog's Observer pattern
-- Result order (`PlainTextNoteBook.find()`):
+- Result order (`PlainTextNoteBook.find()`). An exact match has every query word in its title or contents (smart case):
   - Empty query: every note, newest first
-  - Otherwise, fuzzy title matches come first, best score first. Fuzzy matching applies to queries of 2+ characters and is against the title's last path component, unless the query contains `/`
-  - Then the remaining exact matches (every word in the title or contents), newest first
-- Autoselect stays prefix-based: the newest result whose title starts with the query (ignoring case) and that the exact search also matches. A note found only by fuzzy matching is never autoselected, so fuzzy ranking never changes which note `Enter` opens or whether it creates one
+  - 1. Exact matches whose title equals the query (ignoring case), newest first
+  - 2. Other exact matches whose full title starts with the query (ignoring case), newest first
+  - 3. Fuzzy title matches, best score first. Fuzzy matching needs a query of 3+ characters and is against the title's last path component, or the full title if the query contains `/`
+  - 4. The remaining exact matches, newest first
+- The selection is always the top row, and is set automatically only when that row is an exact match whose full title starts with the typed text (NV prefix semantics): typing `pasta` does not select `recipes/Pasta sauce`, so `Enter` creates `pasta` at the root. A note found only by fuzzy matching is never selected automatically
 - The UI provides synchronized autocomplete between the search box and filtered note list
 - Editor integration uses subprocess to launch external editors and returns to the UI when done
 
@@ -112,19 +116,22 @@ All settings must be in the `[DEFAULT]` section; any other section, or an unknow
 - **urwid 4.x**: Terminal UI framework
 - **watchdog 6.x**: Filesystem monitoring for automatic note syncing
 - **pfzy 0.3.x**: fzy fuzzy scoring for title ranking
+- **wcwidth**: Terminal column widths for snippets (also a dependency of urwid)
 
 ## UI Keyboard Shortcuts
 
 - `Enter`: Open selected note in editor (or create new note if typed a new title)
 - `Esc`, `Ctrl-D`, `Ctrl-U`: Clear selection/search or quit
-- `Ctrl-Q`, `Ctrl-X`, `Ctrl-C`: Quit application (while the editor runs, `Ctrl-C` goes to the editor only)
+- `Ctrl-Q`, `Ctrl-X`, `Ctrl-C`: Quit application, also from the rename and delete prompts (while the editor runs, `Ctrl-C` goes to the editor only)
 - `Tab`, `Left`, `Right`: Accept autocomplete suggestion
 - `Up`/`Down`, `Page Up`/`Page Down`: Navigate note list
 - `Backspace`: Delete search text or clear autocomplete
 - Typing or `Backspace` while a navigated-to note's title replaces the search text edits that title
-- `Ctrl-R`: Rename the selected note (inline prompt in the status line; `Enter` applies, `Esc` cancels)
-- `Ctrl-K`: Delete the selected note after a `y/N` confirmation (only `y` deletes)
-- `Ctrl-P`: Toggle a preview of the selected note (right of the list at 100+ columns, below it otherwise)
+- `Ctrl-R`: Rename the selected note in a status-line prompt prefilled with its title; `Ctrl-U` clears it, `Enter` applies, `Esc` cancels. If the rename fails, the prompt stays open with the error above it
+- `Ctrl-K`: Delete the selected note after a `y/N` confirmation; `y` or `Y` deletes and shows "Deleted '…'", any other key cancels
+- `Ctrl-P`: Toggle a preview of the selected note, or of the top note when none is selected (beside the list at 100+ columns, below it otherwise)
+
+`tv3 --help` lists the main keys; keep its list (in `terminal_velocity.py`) and the README's in step.
 
 ## Code Notes
 

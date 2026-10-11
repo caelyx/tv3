@@ -60,12 +60,23 @@ Run `tv3 [notes_dir]`; the notes directory defaults to `~/Notes`. Defaults can
 be set in `~/.tvrc`; see `tv3 --help` for all options.
 The editor is split like a shell command, so quote a path that contains spaces.
 
-Type to search, or to name a new note. `Enter` opens the selected note, or
-creates one with the typed title; `Tab` accepts the completion; `Up`/`Down`
-move through the list. `Ctrl-R` renames the selected note, `Ctrl-K` deletes
-it and `Ctrl-P` toggles a preview. `Esc` clears the selection, then the
-search, then quits; `Ctrl-X` quits.
-`tv3 --help` lists the command-line options only, not these keys.
+Type to search, or to name a new note. Titles that start with what you typed
+come first, then fuzzy title matches, then notes that contain every word. The
+top note is selected only if its full title starts with what you typed, so
+typing `pasta` doesn't select `recipes/Pasta sauce`, and `Enter` creates `pasta`.
+
+| Key                | Action                                                   |
+| ------------------ | -------------------------------------------------------- |
+| `Enter`            | open the selected note, or create a note titled as typed |
+| `Tab`              | complete the search text to the selected note's title    |
+| `Up`/`Down`        | move through the list of notes                           |
+| `Esc`              | clear the selection, then the search text, then quit     |
+| `Ctrl-R`           | rename the selected note                                 |
+| `Ctrl-K`           | delete the selected note, after asking (y/N)             |
+| `Ctrl-P`           | show or hide the preview pane                            |
+| `Ctrl-Q`, `Ctrl-X` | quit, even from a rename or delete prompt                |
+
+`tv3 --help` lists these keys and the command-line options.
 
 ## Development
 

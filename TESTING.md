@@ -106,6 +106,19 @@ open htmlcov/index.html
 - **`stub_editor`** / **`make_stub_editor`**: A real executable standing in for `$EDITOR`; records each run's arguments and can be made to fail
 - **`make_frame`**: A `MainFrame` on a real notebook in `notes_dir`, run by a headless `urwid_ui.MainLoop` (see `tests/ui_helpers.py`)
 
+## UI Helpers (tests/ui_helpers.py)
+
+UI tests drive a real `MainFrame` with keys and assert on what it draws:
+
+- **`press`** / **`type_text`**: Send keys, or type text, to the frame
+- **`screen_lines`**, **`search_line`**, **`status_line`**: The rendered screen's rows, search row and status row
+- **`list_lines`**: The list's rows, titles and snippets, without padding
+- **`list_titles`**: The list's titles in order, without snippet rows
+- **`highlighted`**: Titles of rows drawn as selected
+- **`marked`**: The text drawn with the match highlight on a row
+- **`footer_rows`**: The status line's rows as `(text, attributes)`, or `[]` when there is none (a failed rename shows two: the error and the prompt)
+- **`RecordingScreen`** / **`ScriptedScreen`** / **`run_headless`**: A headless screen for running a real `urwid_ui.MainLoop`
+
 ## Continuous Integration
 
 These tests are CI-ready:

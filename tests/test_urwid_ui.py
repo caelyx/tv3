@@ -1203,6 +1203,19 @@ class TestHighlighting:
 
         assert stub_editor.calls() == [[str(notes_dir / "apbn.txt")]]
 
+    def test_a_note_in_a_folder_is_not_selected_by_its_name_alone(
+        self, make_frame, stub_editor, notes_dir
+    ):
+        (notes_dir / "recipes").mkdir()
+        frame = make_frame({os.path.join("recipes", "Pasta sauce.txt"): ""})
+        type_text(frame, "pasta")
+        assert list_lines(frame) == [os.path.join("recipes", "Pasta sauce")]
+        assert highlighted(frame) == []
+
+        press(frame, "enter")
+
+        assert stub_editor.calls() == [[str(notes_dir / "pasta.txt")]]
+
     def test_only_visible_rows_are_built(self, make_frame, monkeypatch):
         frame = make_frame({f"note{i:03d}.txt": "body" for i in range(300)})
         built = []

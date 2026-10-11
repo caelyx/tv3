@@ -498,7 +498,7 @@ class PlainTextNoteBook:
         prefix (spaces aside), except that query words with a capital letter
         are not found in a title that has them only in another case. Notes
         whose title lacks a query word get a snippet of `snippet_width`
-        characters at most (see `ranking.snippet`).
+        columns at most (see `ranking.snippet`).
         """
         query = _nfc(query)
         words = tuple(query.split())
