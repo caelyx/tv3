@@ -7,13 +7,14 @@ This directory contains comprehensive tests for Terminal Velocity 3.
 Install test dependencies:
 
 ```bash
-pip install -e ".[test]"
+uv venv
+uv pip install -e ".[test]"
 ```
 
 Or install manually:
 
 ```bash
-pip install pytest pytest-cov pytest-mock
+uv pip install pytest pytest-cov pytest-mock
 ```
 
 ## Running Tests

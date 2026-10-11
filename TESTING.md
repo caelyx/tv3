@@ -9,11 +9,12 @@ A comprehensive test suite has been created for Terminal Velocity 3 using pytest
 ### 1. Install Dependencies
 
 ```bash
-# Install the package with test dependencies
-pip3 install -e ".[test]"
+# Create a virtual environment and install the package with test dependencies
+uv venv
+uv pip install -e ".[test]"
 
 # Or install dependencies separately
-pip3 install urwid==2.1.2 watchdog pytest pytest-cov pytest-mock
+uv pip install urwid==2.1.2 watchdog pytest pytest-cov pytest-mock
 ```
 
 ### 2. Run Tests
@@ -261,7 +262,7 @@ When contributing:
 ### Tests won't run
 ```bash
 # Check dependencies
-pip3 install -e ".[test]"
+uv pip install -e ".[test]"
 
 # Verify pytest installation
 python3 -m pytest --version
@@ -273,7 +274,7 @@ python3 -m pytest --version
 cd /path/to/tv3
 
 # Install in development mode
-pip3 install -e .
+uv pip install -e .
 ```
 
 ### Timing failures

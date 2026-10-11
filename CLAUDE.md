@@ -44,9 +44,8 @@ pip3 install --user .
 
 Or in a virtual environment:
 ```bash
-virtualenv -p python3 env
-source env/bin/activate
-pip3 install .
+uv venv
+uv pip install .
 ```
 
 ### Run the application:

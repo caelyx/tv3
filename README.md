@@ -41,16 +41,16 @@ symlink it to `~/.local/bin/` (or any other directory in your `$PATH`).
 If you are a pythonista and familiar with the command line you probably
 know how to do this.  Otherwise just follow these instructions.
 
+This uses [uv](https://docs.astral.sh/uv/). `uv pip install` targets the
+`.venv` in the current directory, so there is no need to activate it. If
+another virtual environment is already active, `uv` installs into that one
+instead; run `deactivate` first.
+
 ```bash
-bash
-sudo -H pip3 install virtualenv
-git clone https://github.com/caelyx/tv3 ~/.tv3 
+git clone https://github.com/caelyx/tv3 ~/.tv3
 cd ~/.tv3
-virtualenv -p python3 env
-env/bin/activate
-pip3 install .
-deactivate
+uv venv
+uv pip install .
 mkdir -p ~/.local/bin/
-ln -s ~/.tv3/env/bin/tv3 ~/.local/bin/
-exit
+ln -s ~/.tv3/.venv/bin/tv3 ~/.local/bin/
 ```
