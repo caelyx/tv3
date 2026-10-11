@@ -8,7 +8,7 @@ Terminal Velocity 3 (tv3) is a TUI (Text User Interface) application for managin
 
 ## Architecture
 
-The codebase is the `tv3` package in `src/tv3/`, organized into three main modules
+The codebase is the `tv3` package in `src/tv3/`, organized into four modules
 (`__main__.py` makes `python -m tv3` run the CLI):
 
 1. **src/tv3/terminal_velocity.py** - Entry point and CLI argument handling
@@ -20,6 +20,10 @@ The codebase is the `tv3` package in `src/tv3/`, organized into three main modul
    - `PlainTextNoteBook`: Manages a directory of plain text notes
    - `PlainTextNote`: Represents individual note files
    - `brute_force_search()`: Implements case-sensitive/insensitive search across note titles and contents
+   - `PlainTextNoteBook.find()`: Returns ranked `Result`s carrying title highlight spans and a matching-line snippet
+   - `PlainTextNoteBook.rename()` / `delete()`: Rename or delete a note's file; both refuse a note that has changed on disk since it was listed
+   - Content cache: each note's first 1 MiB and mtime are kept in memory and re-read on watcher events, so searches read no files
+   - `loaded`: A background thread reads every note at startup; `loaded` is true once it finishes, and searches with words wait for it
    - `FileEventHandler`: Uses watchdog library to monitor filesystem changes and automatically sync notes in real-time
 
 3. **src/tv3/urwid_ui.py** - Terminal UI layer
@@ -29,10 +33,18 @@ The codebase is the `tv3` package in `src/tv3/`, organized into three main modul
    - `NoteWidget`: Individual note display in the list
    - All UI logic including keyboard shortcuts and editor launching
 
+4. **src/tv3/ranking.py** - Pure functions for ranking and highlighting
+   - Fuzzy title matching with pfzy's fzy scorer
+   - Match spans for highlighting, and the matching-line snippet shown under a note
+
 ### Key Architecture Notes
 
 - The notebook automatically watches the notes directory for external changes using watchdog's Observer pattern
-- Notes are filtered and sorted by modification time (newest first)
+- Result order (`PlainTextNoteBook.find()`):
+  - Empty query: every note, newest first
+  - Otherwise, fuzzy title matches come first, best score first. Fuzzy matching applies to queries of 2+ characters and is against the title's last path component, unless the query contains `/`
+  - Then the remaining exact matches (every word in the title or contents), newest first
+- Autoselect stays prefix-based: the newest result whose title starts with the query (ignoring case) and that the exact search also matches. A note found only by fuzzy matching is never autoselected, so fuzzy ranking never changes which note `Enter` opens or whether it creates one
 - The UI provides synchronized autocomplete between the search box and filtered note list
 - Editor integration uses subprocess to launch external editors and returns to the UI when done
 
@@ -83,6 +95,8 @@ debug = False
 log_file = ~/.tvlog
 ```
 
+All settings must be in the `[DEFAULT]` section; any other section, or an unknown setting, is an error. `tv3 -p` prints the effective configuration in this format, so its output can be pasted back into `~/.tvrc`.
+
 ### Command-line options:
 - `-c, --config`: Specify config file path (default: `~/.tvrc`)
 - `-e, --editor`: Text editor to use (default: `$EDITOR` environment variable, or `pico` if not set)
@@ -96,7 +110,8 @@ log_file = ~/.tvlog
 ## Dependencies
 
 - **urwid 4.x**: Terminal UI framework
-- **watchdog**: Filesystem monitoring for automatic note syncing
+- **watchdog 6.x**: Filesystem monitoring for automatic note syncing
+- **pfzy 0.3.x**: fzy fuzzy scoring for title ranking
 
 ## UI Keyboard Shortcuts
 
@@ -113,7 +128,7 @@ log_file = ~/.tvlog
 
 ## Code Notes
 
-- All three modules use the same logger: `logging.getLogger("tv3")`
+- `terminal_velocity.py`, `tv_notebook.py` and `urwid_ui.py` use the same logger: `logging.getLogger("tv3")`
 - Note titles can include directory separators for organizing notes in subdirectories
 - The `PlainTextNote.contents` property handles UTF-8 decoding with error tolerance
 - Search is case-insensitive if search terms are lowercase, case-sensitive otherwise

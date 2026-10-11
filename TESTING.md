@@ -33,9 +33,11 @@ uv run pytest
 tests/
 ├── README.md                 # Test suite notes
 ├── conftest.py               # Shared fixtures
+├── ui_helpers.py             # Headless screen and helpers for driving MainFrame
 ├── test_tv_notebook.py       # Data layer (tv_notebook.py)
 ├── test_terminal_velocity.py # CLI and config (terminal_velocity.py)
 ├── test_urwid_ui.py          # UI components (urwid_ui.py)
+├── test_ranking.py           # Fuzzy matching, spans and snippets (ranking.py)
 └── test_integration.py       # Integration and regression tests
 
 pyproject.toml                # Pytest configuration ([tool.pytest.ini_options])
@@ -59,7 +61,7 @@ uv run pytest tests/test_tv_notebook.py
 uv run pytest tests/test_tv_notebook.py::TestPlainTextNote
 
 # Specific test
-uv run pytest tests/test_tv_notebook.py::TestPlainTextNote::test_note_creation
+uv run pytest tests/test_tv_notebook.py::TestPlainTextNote::test_contents
 
 # Verbose output
 uv run pytest -v
@@ -101,7 +103,6 @@ open htmlcov/index.html
 - **`temp_notes_dir`**: Empty notes directory under pytest's `tmp_path`
 - **`populated_notes_dir`**: Notes directory with 4 sample `.txt`/`.md` notes
 - **`nested_notes_dir`**: Notes directory with `work/`, `personal/` and `archive/` subdirectories
-- **`sample_config`**: A `~/.tvrc`-style config file pointing at `temp_notes_dir`
 - **`stub_editor`** / **`make_stub_editor`**: A real executable standing in for `$EDITOR`; records each run's arguments and can be made to fail
 - **`make_frame`**: A `MainFrame` on a real notebook in `notes_dir`, run by a headless `urwid_ui.MainLoop` (see `tests/ui_helpers.py`)
 

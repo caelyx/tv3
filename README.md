@@ -60,6 +60,13 @@ Run `tv3 [notes_dir]`; the notes directory defaults to `~/Notes`. Defaults can
 be set in `~/.tvrc`; see `tv3 --help` for all options.
 The editor is split like a shell command, so quote a path that contains spaces.
 
+Type to search, or to name a new note. `Enter` opens the selected note, or
+creates one with the typed title; `Tab` accepts the completion; `Up`/`Down`
+move through the list. `Ctrl-R` renames the selected note, `Ctrl-K` deletes
+it and `Ctrl-P` toggles a preview. `Esc` clears the selection, then the
+search, then quits; `Ctrl-X` quits.
+`tv3 --help` lists the command-line options only, not these keys.
+
 ## Development
 
 ```bash

@@ -26,6 +26,7 @@ uv run pytest
 uv run pytest tests/test_tv_notebook.py
 uv run pytest tests/test_terminal_velocity.py
 uv run pytest tests/test_urwid_ui.py
+uv run pytest tests/test_ranking.py
 uv run pytest tests/test_integration.py
 ```
 
@@ -36,7 +37,7 @@ uv run pytest tests/test_tv_notebook.py::TestPlainTextNote
 
 ### Run specific test:
 ```bash
-uv run pytest tests/test_tv_notebook.py::TestPlainTextNote::test_note_creation
+uv run pytest tests/test_tv_notebook.py::TestPlainTextNote::test_contents
 ```
 
 ### Run with coverage:
@@ -73,7 +74,6 @@ Shared fixtures:
 - `temp_notes_dir`: Empty notes directory under pytest's `tmp_path`
 - `populated_notes_dir`: Notes directory with 4 sample `.txt`/`.md` notes
 - `nested_notes_dir`: Notes directory with `work/`, `personal/` and `archive/` subdirectories
-- `sample_config`: A `~/.tvrc`-style config file pointing at `temp_notes_dir`
 - `stub_editor` / `make_stub_editor`: A real executable standing in for `$EDITOR`; records each run's arguments and can be made to fail
 - `make_frame`: A `MainFrame` on a real notebook in `notes_dir`, run by a headless `urwid_ui.MainLoop` (see `tests/ui_helpers.py`)
 
@@ -81,6 +81,8 @@ Shared fixtures:
 - `test_tv_notebook.py`: data layer (`tv_notebook.py`)
 - `test_terminal_velocity.py`: CLI and configuration (`terminal_velocity.py`)
 - `test_urwid_ui.py`: UI components (`urwid_ui.py`)
+- `test_ranking.py`: fuzzy title matching, match spans and snippets (`ranking.py`)
+- `ui_helpers.py`: not a test module; a headless screen and helpers for driving and inspecting a `MainFrame`
 - `test_integration.py`: end-to-end, integration and regression tests
 
 See each file for its test classes.
@@ -95,12 +97,6 @@ The test suite provides comprehensive coverage of:
 - File watching and automatic synchronization
 - Configuration loading and parsing
 - UI interactions and keyboard shortcuts
-
-✅ **Bug Fixes** (Regression Tests)
-- Python 3 shebang (Issue #1)
-- `shlex.quote` instead of deprecated `pipes.quote` (Issue #2)
-- File watcher path handling (Issue #3)
-- Thread-safe note list operations (Issue #4)
 
 ✅ **Edge Cases**
 - Empty notebooks

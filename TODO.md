@@ -12,14 +12,14 @@ This document tracks improvements identified in the comprehensive codebase revie
 ## CRITICAL Priority (Do First)
 
 ### 2. Add Path Traversal Protection 🔒
-**Location:** `src/tv3/tv_notebook.py:200-222`
+**Location:** `src/tv3/tv_notebook.py` (`_new_note_path`, `_rejection`)
 **Issue:** No validation to prevent creating notes outside the notes directory using `../` in titles.
 **Security Risk:** HIGH - files could be created anywhere the user has write permissions.
 
 **Action Items:**
-- [ ] Add path normalization and validation in `PlainTextNoteBook.add_new()`
-- [ ] Ensure `os.path.realpath()` checks that paths stay within notes directory
-- [ ] Add test cases for path traversal attempts
+- [x] Add path normalization and validation (`add_new()` was replaced by `create()`; `_new_note_path` rejects absolute paths and `..` components)
+- [x] Ensure `os.path.realpath()` checks that paths stay within notes directory (a title through a symlink out of the notebook is rejected)
+- [x] Add test cases for path traversal attempts
 - [ ] Document security considerations
 
 **Implementation:**
@@ -33,16 +33,16 @@ if not abspath.startswith(os.path.realpath(self.path)):
 ---
 
 ### 3. Fix Watchdog Observer Cleanup 🧹
-**Location:** `src/tv3/tv_notebook.py:174-177`
+**Location:** `src/tv3/tv_notebook.py` (`PlainTextNoteBook.close`)
 **Issue:** Observer thread is never stopped or cleaned up.
 **Impact:** Thread leaks; prevents proper shutdown.
 
 **Action Items:**
-- [ ] Add `close()` method to `PlainTextNoteBook` class
-- [ ] Call `observer.stop()` and `observer.join()` in cleanup
-- [ ] Add context manager support (`__enter__`/`__exit__`)
+- [x] Add `close()` method to `PlainTextNoteBook` class
+- [x] Call `observer.stop()` and `observer.join()` in cleanup
+- [x] Add context manager support (`__enter__`/`__exit__`)
 - [ ] Update documentation about proper notebook lifecycle
-- [ ] Add tests for cleanup behavior
+- [x] Add tests for cleanup behavior
 
 **Implementation:**
 ```python
@@ -65,17 +65,17 @@ def __exit__(self, exc_type, exc_val, exc_tb):
 ---
 
 ### 4. Re-enable Error Handling in main()
-**Location:** `src/tv3/terminal_velocity.py:140`
+**Location:** `src/tv3/terminal_velocity.py` (`main`)
 **Issue:** The try/except block is commented out, so errors crash the app ungracefully.
 **Impact:** Poor user experience; no error recovery.
 
 **Action Items:**
-- [ ] Uncomment and fix the try/except block
-- [ ] Add specific exception handlers for common errors
-- [ ] Display user-friendly error messages
-- [ ] Log exceptions properly
-- [ ] Add graceful exit with cleanup
-- [ ] Test error scenarios
+- [x] Uncomment and fix the try/except block
+- [x] Add specific exception handlers for common errors
+- [x] Display user-friendly error messages
+- [x] Log exceptions properly
+- [x] Add graceful exit with cleanup (`launch` closes the frame and its notebook in a `finally`)
+- [x] Test error scenarios
 
 **Implementation:**
 ```python
@@ -101,7 +101,7 @@ except Exception as e:
 - [x] Pin `watchdog` version in pyproject.toml (`watchdog>=6,<7`)
 - [x] Declare dependencies only in pyproject.toml
 - [x] ~~Document why urwid is pinned to 2.1.2~~ (pin removed: urwid 2.1.2 cannot start on Python 3.14; now `urwid>=4.2.5,<5`)
-- [ ] Test with specified versions
+- [x] Test with specified versions (CI runs `uv sync --locked` before the tests)
 - [x] Lock dependencies with uv (`uv.lock`)
 
 ---
@@ -123,26 +123,26 @@ except Exception as e:
 ## HIGH Priority (Do Soon)
 
 ### 7. Add Type Hints 📝
-**Analysis:** 0 type hints found in entire codebase (789 LOC)
-**Issue:** No static type checking possible; harder to maintain and refactor.
+**Analysis:** `tv_notebook.py` and `ranking.py` are mostly annotated; `terminal_velocity.py` and `urwid_ui.py` have no annotations.
+**Issue:** Static type checking covers only part of the code; harder to maintain and refactor.
 
 **Action Items:**
 - [ ] Add type hints to `tv_notebook.py` module
-  - [ ] `PlainTextNote` class
+  - [x] `PlainTextNote` class
   - [ ] `PlainTextNoteBook` class
   - [ ] `brute_force_search()` function
-  - [ ] `FileEventHandler` class
+  - [x] `FileEventHandler` class
 - [ ] Add type hints to `terminal_velocity.py` module
   - [ ] `main()` function
 - [ ] Add type hints to `urwid_ui.py` module
   - [ ] All widget classes
   - [ ] `launch()` function
-  - [ ] `system()` function
-- [ ] Add `from typing import` imports (List, Dict, Optional, Union)
+  - [x] ~~`system()` function~~ (no longer exists; the editor runs from `MainFrame.edit`)
+- [x] ~~Add `from typing import` imports (List, Dict, Optional, Union)~~ (superseded: annotations use built-in generics and `X | None`)
 - [ ] Add `py.typed` marker file
 - [x] Configure mypy in `pyproject.toml` (`[tool.mypy]`)
 - [ ] Add mypy to pre-commit hooks
-- [ ] Run mypy and fix all errors
+- [x] Run mypy and fix all errors (`uv run mypy src` passes; CI runs it)
 
 **Resources:**
 - Python typing documentation: https://docs.python.org/3/library/typing.html
@@ -156,20 +156,20 @@ except Exception as e:
 **Action Items:**
 
 #### a) Remove explicit `object` inheritance (Python 2 style)
-- [ ] Remove `(object)` from `PlainTextNote` class (tv_notebook.py:57)
-- [ ] Remove `(object)` from `PlainTextNoteBook` class (tv_notebook.py:132)
-- [ ] Verify all classes use implicit new-style classes
+- [x] Remove `(object)` from `PlainTextNote` class
+- [x] Remove `(object)` from `PlainTextNoteBook` class
+- [x] Verify all classes use implicit new-style classes
 
 #### b) Fix property setter syntax
-- [ ] Fix `@title.setter` method name in `PlainTextNote` (tv_notebook.py:82-83)
-- [ ] Should be `def title(self, ...)` not `def set_title(self, ...)`
-- [ ] Test property setter behavior
+- [x] ~~Fix `@title.setter` method name in `PlainTextNote`~~ (no longer applies: `title` is read-only; `rename()` returns a new note)
+- [x] ~~Should be `def title(self, ...)` not `def set_title(self, ...)`~~ (no setter)
+- [x] ~~Test property setter behavior~~ (no setter)
 
 #### c) Use modern string formatting
-- [ ] Replace all `%` formatting with f-strings
-- [ ] Replace all `.format()` calls with f-strings
-- [ ] Update tests to use f-strings
-- [ ] Verify no formatting regressions
+- [x] Replace all `%` formatting with f-strings
+- [x] Replace all `.format()` calls with f-strings (src has none; `tests/conftest.py` fills a script template with `.format()`)
+- [x] Update tests to use f-strings
+- [x] Verify no formatting regressions
 
 ---
 
@@ -239,12 +239,12 @@ except Exception as e:
 **Issue:** Mix of %, .format(), and no f-strings.
 
 **Action Items:**
-- [ ] Replace all `%` formatting with f-strings
-- [ ] Replace all `.format()` calls with f-strings
-- [ ] Update logging calls to use f-strings (or lazy % for performance)
-- [ ] Update tests to use f-strings
-- [ ] Run ruff to catch remaining issues
-- [ ] Verify no regressions
+- [x] Replace all `%` formatting with f-strings
+- [x] Replace all `.format()` calls with f-strings (src has none; `tests/conftest.py` fills a script template with `.format()`)
+- [x] Update logging calls to use f-strings (or lazy % for performance)
+- [x] Update tests to use f-strings
+- [x] Run ruff to catch remaining issues
+- [x] Verify no regressions
 
 **Examples:**
 ```python
@@ -267,26 +267,26 @@ logger.debug(f"Creating filename: {filename}")
 **Action Items:**
 
 #### a) File system errors in note contents
-- [ ] Wrap file operations in try/except in `PlainTextNote.contents` property
-- [ ] Handle `PermissionError`, `FileNotFoundError`, `IOError`
-- [ ] Log errors appropriately
-- [ ] Return empty string or raise custom exception
-- [ ] Add tests for error scenarios
+- [x] Wrap file operations in try/except in `PlainTextNote.contents` property (in `PlainTextNoteBook._read`)
+- [x] Handle `PermissionError`, `FileNotFoundError`, `IOError` (as `OSError`)
+- [x] Log errors appropriately
+- [x] Return empty string or raise custom exception (empty string)
+- [x] Add tests for error scenarios
 
 #### b) Config file parsing errors
-- [ ] Validate config file syntax in `terminal_velocity.py`
-- [ ] Show clear error messages for invalid config
-- [ ] Test with malformed config files
-- [ ] Document config file format
+- [x] Validate config file syntax in `terminal_velocity.py`
+- [x] Show clear error messages for invalid config
+- [x] Test with malformed config files
+- [x] Document config file format (`tv3 --help`)
 
 #### c) Editor execution errors
-- [ ] Handle editor command failures in `urwid_ui.system()`
-- [ ] Show user-friendly error messages
-- [ ] Test with non-existent editors
+- [x] Handle editor command failures (`urwid_ui.system()` is gone; `MainFrame.edit` handles them)
+- [x] Show user-friendly error messages (in the status line)
+- [x] Test with non-existent editors
 
 #### d) Watchdog observer errors
-- [ ] Handle exceptions in `FileEventHandler` methods
-- [ ] Log errors without crashing
+- [x] Handle exceptions in `FileEventHandler` methods
+- [x] Log errors without crashing
 - [ ] Test with permission issues
 
 ---
@@ -372,13 +372,13 @@ repos:
 ### 16. Extract Magic Numbers to Constants
 
 **Action Items:**
-- [ ] Create constants module or section in each file
-- [ ] Extract log file size: `LOG_MAX_BYTES = 1_000_000` (terminal_velocity.py:129)
-- [ ] Extract watchdog settle time: `WATCHDOG_SETTLE_TIME = 0.5` (tests)
-- [ ] Extract log backup count: `LOG_BACKUP_COUNT = 0` (terminal_velocity.py:130)
-- [ ] Extract default extensions list as constant
-- [ ] Extract default exclude list as constant
-- [ ] Use SCREAMING_SNAKE_CASE for constants
+- [x] Create constants module or section in each file
+- [x] Extract log file size: `LOG_MAX_BYTES = 1_000_000` (terminal_velocity.py)
+- [x] ~~Extract watchdog settle time: `WATCHDOG_SETTLE_TIME = 0.5` (tests)~~ (superseded: tests poll with the `wait_until` fixture)
+- [x] Extract log backup count: `LOG_BACKUP_COUNT = 1` (terminal_velocity.py)
+- [x] Extract default extensions list as constant
+- [x] Extract default exclude list as constant
+- [x] Use SCREAMING_SNAKE_CASE for constants
 - [ ] Document what each constant represents
 
 **Example:**
@@ -391,7 +391,7 @@ DEFAULT_EXCLUDE_DIRS = ["src", "backup", "ignore", "tmp", "old"]
 
 # Logging constants
 LOG_MAX_BYTES = 1_000_000  # 1 MB
-LOG_BACKUP_COUNT = 0
+LOG_BACKUP_COUNT = 1
 
 # File watching constants
 WATCHDOG_SETTLE_TIME = 0.5  # seconds to wait for filesystem to settle
@@ -402,9 +402,9 @@ WATCHDOG_SETTLE_TIME = 0.5  # seconds to wait for filesystem to settle
 ### 17. Make Tests Less Timing-Sensitive
 
 **Action Items:**
-- [ ] Replace hardcoded `time.sleep()` with polling functions
-- [ ] Create utility function `wait_for_condition(condition, timeout)`
-- [ ] Update file watching tests to use polling
+- [x] Replace hardcoded `time.sleep()` with polling functions
+- [x] Create utility function `wait_for_condition(condition, timeout)` (the `wait_until` fixture in `tests/conftest.py`)
+- [x] Update file watching tests to use polling
 - [ ] Make timeouts configurable via environment variable
 - [ ] Document timing requirements in test docstrings
 - [ ] Test on slow CI environments
@@ -479,10 +479,10 @@ from .terminal_velocity import main
 - [x] Remove flake8 from CI workflow
 - [x] Add ruff to CI workflow
 - [x] Configure ruff in `pyproject.toml` or `ruff.toml`
-- [ ] Run `ruff check --fix .` to auto-fix issues
-- [ ] Run `ruff format .` to format code
-- [ ] Review and commit changes
-- [ ] Update documentation
+- [x] Run `ruff check --fix .` to auto-fix issues
+- [x] Run `ruff format .` to format code
+- [x] Review and commit changes
+- [x] Update documentation (CLAUDE.md lists the ruff commands)
 
 **Ruff Configuration (pyproject.toml):**
 ```toml
@@ -513,11 +513,11 @@ ignore = [
 ## Testing Checklist
 
 After implementing all changes, verify:
-- [ ] All tests pass: `pytest`
-- [ ] Coverage is adequate: `pytest --cov=src --cov-report=term-missing`
-- [ ] Type checking passes: `mypy src/`
-- [ ] Linting passes: `ruff check .`
-- [ ] Formatting is correct: `ruff format --check .`
+- [x] All tests pass: `pytest`
+- [x] Coverage is adequate: `pytest --cov=src --cov-report=term-missing` (CI fails under 80%)
+- [x] Type checking passes: `mypy src/`
+- [x] Linting passes: `ruff check .`
+- [x] Formatting is correct: `ruff format --check .`
 - [ ] Pre-commit hooks pass: `pre-commit run --all-files`
 - [ ] CI workflows pass on GitHub
 - [ ] Manual testing of core functionality
@@ -528,9 +528,9 @@ After implementing all changes, verify:
 ## Progress Tracking
 
 **Total Items:** 18 major tasks + numerous subtasks
-**Completed:** 0
-**In Progress:** 0
-**Not Started:** 18
+**Completed:** 5 (4, 5, 8, 12, Replace flake8 with ruff)
+**In Progress:** 11 (2, 3, 6, 7, 9, 10, 11, 13, 16, 17, 18)
+**Not Started:** 2 (14, 15)
 
 **Target Completion:** [Set date]
 
@@ -546,5 +546,5 @@ After implementing all changes, verify:
 
 ---
 
-**Last Updated:** 2025-11-26
+**Last Updated:** 2026-10-12
 **Maintainer:** [Your Name]

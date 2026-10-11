@@ -67,23 +67,6 @@ def nested_notes_dir(temp_notes_dir):
     return temp_notes_dir
 
 
-@pytest.fixture
-def sample_config(temp_notes_dir, tmp_path):
-    """Create a sample configuration file."""
-    config_file = tmp_path / "test_tvrc"
-    config_content = f"""[DEFAULT]
-editor = vim
-extension = .txt
-extensions = .txt, .md, .markdown
-notes_dir = {temp_notes_dir}
-exclude = backup, tmp
-debug = False
-log_file = {tmp_path}/test_tv.log
-"""
-    config_file.write_text(config_content)
-    return str(config_file)
-
-
 STUB_EDITOR_SCRIPT = """#!{python}
 import json
 import os

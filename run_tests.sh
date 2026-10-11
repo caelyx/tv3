@@ -19,7 +19,7 @@ elif [ "$1" == "fast" ]; then
     uv run pytest -m "not slow"
 elif [ "$1" == "unit" ]; then
     echo "Running unit tests only..."
-    uv run pytest tests/test_tv_notebook.py tests/test_terminal_velocity.py tests/test_urwid_ui.py
+    uv run pytest tests/test_tv_notebook.py tests/test_terminal_velocity.py tests/test_urwid_ui.py tests/test_ranking.py
 elif [ "$1" == "integration" ]; then
     echo "Running integration tests only..."
     uv run pytest tests/test_integration.py
