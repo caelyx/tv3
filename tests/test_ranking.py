@@ -9,7 +9,15 @@ import pytest
 from pfzy import fzy_scorer
 from urwid import calc_width
 
-from tv3.ranking import fuzzy_match, fuzzy_needle, printable, snippet, word_spans
+from tv3.ranking import (
+    fold,
+    fuzzy_match,
+    fuzzy_needle,
+    prefix_length,
+    printable,
+    snippet,
+    word_spans,
+)
 
 DOTTED_I = "\u0130"  # U+0130 lowercases to two characters, "i" and a combining dot
 
@@ -19,6 +27,77 @@ WIDE = ["中文字", "😀", "❤\ufe0f", "👨\u200d👩\u200d👧", "\uff46\uf
 def columns(text):
     """The display width of `text` as urwid measures it."""
     return calc_width(text, 0, len(text))
+
+
+class TestFold:
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("Foo", "foo"),
+            ("Straße", "strasse"),
+            ("\ufb01le", "file"),
+            ("Ñ", "ñ"),
+            (unicodedata.normalize("NFD", "Ñ"), "ñ"),
+            (DOTTED_I, "i\u0307"),
+            ("J\u030c", "\u01f0"),
+            ("\u01f0", "\u01f0"),
+        ],
+    )
+    def test_fold(self, text, expected):
+        assert fold(text) == expected
+
+
+class TestPrefixLength:
+    """How many characters of a title the typed text covers, if the title starts with it."""
+
+    @pytest.mark.parametrize(
+        ("title", "typed", "expected"),
+        [
+            ("hello", "", 0),
+            ("hello", "hel", 3),
+            ("hello", "HEL", 3),
+            ("hello", "help", None),
+            ("Straße", "strasse", 6),
+            ("Straße", "STRASSE", 6),
+            ("Straße", "strass", 5),
+            ("Straße", "stras", 5),
+            ("Straße", "straß", 5),
+            ("Straße plan", "strasse p", 8),
+            ("\ufb01le", "file", 3),
+            ("\ufb01le", "f", 1),
+            ("\ufb01le", "fi", 1),
+            ("\ufb01le", "files", None),
+            (DOTTED_I + "stanbul", "i", 1),
+            (DOTTED_I + "stanbul", "i\u0307s", 2),
+            (DOTTED_I + "stanbul", "ist", None),
+            ("ñ", "Ñ", 1),
+            ("ñ", unicodedata.normalize("NFD", "Ñ"), 1),
+            ("ñ", "n", None),
+            ("café", unicodedata.normalize("NFD", "CAFÉ"), 4),
+            ("J\u030cournal", "j", None),
+            ("J\u030cournal", "\u01f0o", 3),
+        ],
+    )
+    def test_prefix_length(self, title, typed, expected):
+        assert prefix_length(title, typed) == expected
+
+    def test_matches_exactly_when_the_folded_title_starts_with_the_folded_text(self):
+        rng = random.Random(7)
+        alphabet = ["a", "A", "s", "S", "ß", "ẞ", "i", "I", DOTTED_I, "\u0131", "\ufb01", "f"]
+        alphabet += ["n", "\u0303", "ñ", "Ñ", "e", "\u0301", "é", "ǅ", "ǆ", "J", "\u030c", " "]
+        for _ in range(5000):
+            title = unicodedata.normalize(
+                "NFC", "".join(rng.choice(alphabet) for _ in range(rng.randint(1, 6)))
+            )
+            typed = "".join(rng.choice(alphabet) for _ in range(rng.randint(0, 5)))
+            if rng.random() < 0.5:
+                typed = title[: rng.randint(0, len(title))]
+                typed = rng.choice([typed, typed.swapcase(), unicodedata.normalize("NFD", typed)])
+            length = prefix_length(title, typed)
+            assert (length is not None) == fold(title).startswith(fold(typed)), (title, typed)
+            if length is not None:
+                assert fold(title[:length]).startswith(fold(typed)), (title, typed)
+                assert length == 0 or not fold(title[: length - 1]).startswith(fold(typed))
 
 
 class TestFuzzyNeedle:

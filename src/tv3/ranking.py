@@ -40,6 +40,36 @@ def printable(text: str) -> str:
     return text.translate(_CONTROL_TO_SPACE)
 
 
+def fold(text: str) -> str:
+    """`text` for comparing ignoring case and Unicode normalisation.
+
+    NFC-normalised, casefolded, then NFC-normalised again, since casefolding
+    can decompose a character or leave one that composes ("J" and a combining
+    caron fold to U+01F0). Casefolding can lengthen text: "ß" folds to "ss",
+    the ligature "ﬁ" to "fi", U+0130 to "i" and a combining dot.
+    """
+    return unicodedata.normalize("NFC", unicodedata.normalize("NFC", text).casefold())
+
+
+def starts_with(title: str, typed: str) -> bool:
+    """Whether `title` starts with `typed`, ignoring case and Unicode normalisation (see `fold`)."""
+    return fold(title).startswith(fold(typed))
+
+
+def prefix_length(title: str, typed: str) -> int | None:
+    """How many characters of `title` `typed` covers, or None if `title` does
+    not start with `typed` ignoring case and Unicode normalisation.
+
+    When `starts_with(title, typed)`, the result is the length of the shortest start of `title` whose
+    folded form starts with `fold(typed)`: a character that `typed` covers
+    only part of the folded form of counts, so "stras" covers all of "Straß".
+    """
+    if not starts_with(title, typed):
+        return None
+    folded = fold(typed)
+    return next(n for n in range(len(title) + 1) if fold(title[:n]).startswith(folded))
+
+
 def fuzzy_needle(query: str) -> str | None:
     """The fuzzy-match needle for `query`: NFC-normalised, stripped and lowercased.
 

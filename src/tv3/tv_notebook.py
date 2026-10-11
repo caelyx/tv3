@@ -298,7 +298,10 @@ class Result:
 
     `exact` is whether the note is an exact match: every query word occurs
     in its title or contents, with smart case (see `brute_force_search`).
-    Every note is an exact match for a query without words.
+    Every note is an exact match for a query without words. `prefix` is
+    whether the note's title starts with the query, ignoring case and Unicode
+    normalisation (`ranking.starts_with`); it is False for every note when
+    the query has no words.
 
     Spans are half-open `(start, end)` character ranges, sorted and
     non-overlapping: `title_spans` index `note.title`, `snippet_spans` index
@@ -314,6 +317,7 @@ class Result:
 
     note: PlainTextNote
     exact: bool
+    prefix: bool
     _words: tuple[str, ...] = field(repr=False)
     _snippet_width: int = field(repr=False)
     _fuzzy_spans: tuple[ranking.Span, ...] | None = field(default=None, repr=False)
@@ -476,33 +480,34 @@ class PlainTextNoteBook:
     def find(self, query: str, snippet_width: int = ranking.SNIPPET_WIDTH) -> list[Result]:
         """The notes matching `query`, best first, with what to highlight.
 
-        The notes are those `search` returns (exact matches) plus those whose
-        title fuzzy matches the whole query (see `ranking.fuzzy_needle`; it
-        needs at least MIN_FUZZY_LENGTH characters). The fuzzy match is against
+        The notes are those `search` returns (exact matches), those whose
+        title starts with the query (prefix matches; see `ranking.starts_with`)
+        and those whose title fuzzy matches the whole query (see
+        `ranking.fuzzy_needle`; it needs at least MIN_FUZZY_LENGTH
+        characters). Prefix matching ignores case whatever the query's case:
+        smart case applies only to exact matches. The fuzzy match is against
         the title's last path component, so a folder name does not
         fuzzy-match the notes in it, unless the query contains a path
         separator; then it is against the whole title. The query is put in
         Unicode normalisation form NFC, like titles and contents.
 
         A query without words gives every note, newest first. Otherwise, with
-        titles and the query compared ignoring case (`str.casefold`):
+        titles and the query compared by `ranking.fold`:
 
-        1. exact matches whose title equals the query, newest first;
-        2. other exact matches whose whole title starts with the query,
-           newest first;
+        1. prefix matches whose title equals the query, newest first;
+        2. other prefix matches, newest first;
         3. other fuzzy matches, best score first, newer first on ties;
         4. other exact matches, newest first.
 
-        A title that starts with the query only when case is ignored is not an
-        exact match if the query has a capital letter (smart case) and
-        contents lack it; such a note is in group 3. So the first result is in
-        group 1 or 2 whenever any result is.
+        The results flagged `prefix` are those in groups 1 and 2, so they
+        come first.
 
         A fuzzy match's title spans are the fuzzy-matched characters, whatever
         its group; other notes' title spans are the query words found in the
-        title, with smart case. In groups 1 and 2 both cover the matched
-        prefix (spaces aside), except that query words with a capital letter
-        are not found in a title that has them only in another case. Notes
+        title, with smart case. For exact matches in groups 1 and 2 both cover
+        the matched prefix (spaces aside), except that query words with a
+        capital letter are not found in a title that has them only in another
+        case. Notes
         whose title lacks a query word get a snippet of `snippet_width`
         columns at most (see `ranking.snippet`).
         """
@@ -511,7 +516,7 @@ class PlainTextNoteBook:
         exact = self.search(query)
         if not words:
             exact.sort(key=lambda n: n.mtime, reverse=True)
-            return [Result(note, True, words, snippet_width) for note in exact]
+            return [Result(note, True, False, words, snippet_width) for note in exact]
         needle = ranking.fuzzy_needle(query)
         fuzzy: dict[PlainTextNote, tuple[float, tuple[ranking.Span, ...]]] = {}
         if needle is not None:
@@ -519,19 +524,14 @@ class PlainTextNoteBook:
                 match = ranking.fuzzy_match(needle, note.title)
                 if match is not None:
                     fuzzy[note] = match
-        folded = query.casefold()
+        folded = ranking.fold(query)
         equal: list[PlainTextNote] = []
         prefix: list[PlainTextNote] = []
-        rest: list[PlainTextNote] = []
-        for note in exact:
-            title = note.title.casefold()
-            if title == folded:
-                equal.append(note)
-            elif title.startswith(folded):
-                prefix.append(note)
-            elif note not in fuzzy:
-                rest.append(note)
+        for note in self:
+            if ranking.starts_with(note.title, query):
+                (equal if ranking.fold(note.title) == folded else prefix).append(note)
         prefixed = {*equal, *prefix}
+        rest = [note for note in exact if note not in prefixed and note not in fuzzy]
         fuzzy_rest = [
             (score, note.mtime, note) for note, (score, _) in fuzzy.items() if note not in prefixed
         ]
@@ -545,6 +545,7 @@ class PlainTextNoteBook:
             Result(
                 note,
                 note in exact_set,
+                note in prefixed,
                 words,
                 snippet_width,
                 fuzzy[note][1] if note in fuzzy else None,

@@ -24,7 +24,7 @@ from watchdog.events import (
 
 from tests.conftest import BASE_MTIME
 from tv3 import tv_notebook
-from tv3.ranking import SNIPPET_WIDTH, fuzzy_match, fuzzy_needle
+from tv3.ranking import SNIPPET_WIDTH, fold, fuzzy_match, fuzzy_needle, prefix_length
 from tv3.tv_notebook import (
     DeleteNoteError,
     FileEventHandler,
@@ -1732,9 +1732,13 @@ class TestFind:
             pytest.param("maze", ["maze", "zebra"], id="equal-then-exact"),
             pytest.param("ze", ["zebra", "maze"], id="two-characters-prefix-then-exact"),
             pytest.param("abc", ["abc 2", "abc 1"], id="prefix-newer-first"),
-            pytest.param("ZE", [], id="two-characters-no-fuzzy"),
+            pytest.param("ZE", ["zebra"], id="two-characters-prefix-ignores-case"),
+            pytest.param(
+                "M", ["maze", "mtg plan", "meeting notes"], id="one-character-prefix-ignores-case"
+            ),
+            pytest.param("ZB", [], id="two-characters-no-fuzzy"),
             pytest.param("ZEB", ["zebra"], id="uppercase-fuzzy"),
-            pytest.param("MAZE", ["maze"], id="uppercase-fuzzy-not-exact"),
+            pytest.param("MAZE", ["maze"], id="uppercase-equal-not-exact"),
             pytest.param("m p", ["mtg plan", "zebra"], id="space-in-fuzzy-query"),
             pytest.param("milk eggs", ["groceries"], id="multi-word-exact"),
             pytest.param("xyzzy", [], id="nothing"),
@@ -1828,9 +1832,10 @@ class TestFind:
         with pytest.raises(AttributeError):
             result.snippet = "x"
 
-    def test_result_set_is_exact_matches_plus_fuzzy_title_matches(self, nb):
-        for query in ["m", "mtg", "ze", "ZE", "ZEB", "maze", "m p", "abc", "a", "e", "budget"]:
+    def test_result_set_is_exact_prefix_and_fuzzy_title_matches(self, nb):
+        for query in ["m", "M", "mtg", "ze", "ZE", "ZEB", "maze", "m p", "abc", "a", "e", "budget"]:
             exact = {n.title for n in nb.search(query)}
+            prefix = {n.title for n in nb if prefix_length(n.title, query) is not None}
             needle = query.strip().lower()
             fuzzy = (
                 {n.title for n in nb if fuzzy_match(needle, n.title) is not None}
@@ -1838,8 +1843,13 @@ class TestFind:
                 else set()
             )
             results = nb.find(query)
-            assert {r.note.title for r in results} == exact | fuzzy, query
+            assert {r.note.title for r in results} == exact | prefix | fuzzy, query
             assert {r.note.title for r in results if r.exact} == exact, query
+            assert {r.note.title for r in results if r.prefix} == prefix, query
+
+    @pytest.mark.parametrize("query", ["", " ", " \t "])
+    def test_query_without_words_has_no_prefix_results(self, nb, query):
+        assert not any(r.prefix for r in nb.find(query))
 
     @pytest.mark.parametrize(
         ("query", "expected"),
@@ -1902,7 +1912,7 @@ class TestFind:
         assert [r.note.title for r in results] == ["café", "Café menu", "a café"]
         assert [r.title_spans for r in results] == [((0, 4),), ((0, 4),), ((2, 6),)]
 
-    def test_prefix_match_that_is_not_an_exact_match_ranks_as_fuzzy(
+    def test_prefix_ignores_case_even_where_smart_case_does_not(
         self, temp_notes_dir, write_notes, unwatched_notebook
     ):
         write_notes(temp_notes_dir, self.PREFIX_NOTES)
@@ -1910,18 +1920,43 @@ class TestFind:
 
         results = nb.find("Todo")
 
-        assert [(r.note.title, r.exact) for r in results][:2] == [
-            ("Todo list", True),
-            ("todo", False),
+        assert [(r.note.title, r.prefix, r.exact) for r in results] == [
+            ("todo", True, False),
+            ("Todo list", True, True),
+            ("todo house", True, False),
+            ("toad dome", False, False),
+            ("photo docs", False, False),
         ]
-        assert not any(r.exact for r in results[1:])
+
+    @pytest.mark.parametrize(
+        ("title", "query"),
+        [
+            ("foo", "Foo"),
+            ("ñ", "Ñ"),
+            ("Straße", "strasse"),
+            ("Straße", "STRASS"),
+            ("\ufb01le", "fil"),
+            ("\u0130stanbul", "i"),
+        ],
+    )
+    def test_title_that_starts_with_the_query_ignoring_case_is_first(
+        self, temp_notes_dir, write_notes, unwatched_notebook, title, query
+    ):
+        write_notes(temp_notes_dir, {title + ".txt": "", "other.txt": query})
+        nb = unwatched_notebook(temp_notes_dir)
+
+        results = nb.find(query)
+
+        assert (results[0].note.title, results[0].prefix) == (title, True)
+        assert not any(r.prefix for r in results[1:])
 
     def test_top_row_is_autoselectable_whenever_any_prefix_match_is(
         self, tmp_path, unwatched_notebook
     ):
-        """Over random queries on a random notebook: if any result is an exact
-        match whose title starts with the query, ignoring case, the first
-        result is one, so autoselecting the first such result selects the top row.
+        """Over random queries on a random notebook: every note whose title
+        starts with the query, ignoring case (`prefix_length`), is a result
+        flagged `prefix`, and those results come first, so autoselecting the
+        first result when it is flagged selects the top row.
         """
         rng = random.Random(4)
         vocab = ["todo", "Todo", "to", "do", "house", "plan", "mtg", "meeting", "zebra"]
@@ -1962,17 +1997,21 @@ class TestFind:
             folded = unicodedata.normalize("NFC", query).casefold()
             needle = fuzzy_needle(query)
 
-            def is_prefix(r, folded=folded):
-                return r.exact and r.note.title.casefold().startswith(folded)
+            def is_prefix(r, query=query):
+                return prefix_length(r.note.title, query) is not None
 
-            def group(r, folded=folded, needle=needle):
+            def group(r, query=query, needle=needle):
                 if is_prefix(r):
-                    return 1 if r.note.title.casefold() == folded else 2
+                    return 1 if fold(r.note.title) == fold(query) else 2
                 fuzzy = needle is not None and fuzzy_match(needle, r.note.title) is not None
                 return 3 if fuzzy else 4
 
             assert len({r.note for r in results}) == len(results), query
             assert {r.note for r in results if r.exact} == set(nb.search(query)), query
+            assert [r.prefix for r in results] == [is_prefix(r) for r in results], query
+            assert {r.note for r in results if r.prefix} == {
+                n for n in nb if prefix_length(n.title, query) is not None
+            }, query
             if any(is_prefix(r) for r in results):
                 prefix_matched += 1
                 assert is_prefix(results[0]), query
@@ -1980,7 +2019,7 @@ class TestFind:
             assert groups == sorted(groups), query
             if query.islower() and len(folded) == len(query):
                 for r in results:
-                    if group(r) <= 2:
+                    if group(r) <= 2 and r.exact:
                         covered = {i for a, b in r.title_spans for i in range(a, b)}
                         typed = {i for i, c in enumerate(r.note.title[: len(folded)]) if c != " "}
                         assert typed <= covered, (query, r.note.title, r.title_spans)

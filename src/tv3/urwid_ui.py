@@ -10,7 +10,6 @@ import sys
 import termios
 import threading
 import typing
-import unicodedata
 from typing import NamedTuple
 
 import urwid
@@ -49,23 +48,23 @@ PREVIEW_BESIDE_MIN_COLS = 100
 LIST_PADDING = 1
 
 
-def completed_length(completion, typed):
-    """How many characters of `completion` `typed` spells out, ignoring case, or None if
-    `typed` does not start `completion`.
+class ClipLayout(urwid.StandardTextLayout):
+    """urwid's standard text layout, without zero-width text segments.
 
-    `typed` is compared in Unicode normalisation form NFC, as titles are.
-    Lowercasing can lengthen a character (U+0130 becomes "i" and a combining
-    dot), so the count is of `completion`'s characters, not `typed`'s; a
-    character whose lowercase form `typed` only starts counts.
+    Clipped, urwid lays out a line of zero width, such as a lone combining
+    character, as a text segment of zero columns, which urwid then refuses
+    to render. Without it, such a line lays out as it does when wrapped:
+    an empty line.
     """
-    typed = unicodedata.normalize("NFC", typed).lower()
-    if not completion.lower().startswith(typed):
-        return None
-    length = covered = 0
-    while covered < len(typed):
-        covered += len(completion[length].lower())
-        length += 1
-    return length
+
+    def layout(self, text, width, align, wrap):
+        return [
+            [seg for seg in line if len(seg) != 3 or seg[0] != 0] or line
+            for line in super().layout(text, width, align, wrap)
+        ]
+
+
+CLIP_LAYOUT = ClipLayout()
 
 
 def placeholder_text(text):
@@ -100,7 +99,8 @@ class NoteWidget(urwid.WidgetWrap):
 
     def __init__(self, result):
         self.result = result
-        lines = [urwid.Text(marked_up(result.note.title, result.title_spans), wrap=urwid.CLIP)]
+        title = marked_up(result.note.title, result.title_spans)
+        lines = [urwid.Text(title, wrap=urwid.CLIP, layout=CLIP_LAYOUT)]
         if result.snippet is not None:
             snippet = [SNIPPET_INDENT, *marked_up(result.snippet, result.snippet_spans)]
             lines.append(urwid.AttrMap(urwid.Text(snippet, wrap=urwid.CLIP), "snippet"))
@@ -136,7 +136,7 @@ class AutocompleteWidget(urwid.Edit):
 
     def __init__(self, *args, **kwargs):
         self._autocomplete_text = None
-        super().__init__(*args, wrap=urwid.CLIP, **kwargs)
+        super().__init__(*args, wrap=urwid.CLIP, layout=CLIP_LAYOUT, **kwargs)
 
     def get_autocomplete_text(self):
         return self._autocomplete_text
@@ -148,21 +148,29 @@ class AutocompleteWidget(urwid.Edit):
     autocomplete_text = property(get_autocomplete_text, set_autocomplete_text)
 
     def completion_extends_text(self):
-        """Whether the completion continues the non-empty typed text, ignoring case."""
+        """Whether the completion continues the non-empty typed text, ignoring case
+        and Unicode normalisation (`ranking.starts_with`)."""
         typed = self.edit_text
         completion = self.autocomplete_text
-        return (
-            bool(typed)
-            and completion is not None
-            and completed_length(completion, typed) is not None
-        )
+        return bool(typed) and completion is not None and ranking.starts_with(completion, typed)
+
+    def completion_is_longer(self):
+        """Whether the completion continues the typed text with more characters."""
+        typed = self.edit_text
+        completion = self.autocomplete_text
+        if not typed or completion is None:
+            return False
+        length = ranking.prefix_length(completion, typed)
+        return length is not None and length < len(completion)
 
     def _display(self):
         """The markup to draw, and the cursor's index into its text.
 
-        A completion that extends the typed text is shown after it, with the
-        cursor at the typed position; any other completion replaces it, with
-        the cursor at its end.
+        A completion that extends the typed text is shown in its place: the
+        characters the typed text covers (`ranking.prefix_length`) in the
+        search style, the rest in the completion style, with the cursor at
+        the typed position. Any other completion replaces it, with the cursor
+        at its end.
         """
         typed = self.edit_text
         completion = self.autocomplete_text
@@ -170,9 +178,9 @@ class AutocompleteWidget(urwid.Edit):
             if typed:
                 return typed, self.edit_pos
             return ("placeholder", self.placeholder), 0
-        end = completed_length(completion, typed) if typed else None
+        end = ranking.prefix_length(completion, typed) if typed else None
         if end is not None:
-            cursor = completed_length(completion, typed[: self.edit_pos])
+            cursor = ranking.prefix_length(completion, typed[: self.edit_pos])
             return [
                 ("search", completion[:end]),
                 ("autocomplete", completion[end:]),
@@ -701,12 +709,7 @@ class MainFrame(urwid.Frame):
 
         Deleting never autoselects a note.
         """
-        box = self.search_box
-        if (
-            self.selected_note is not None
-            and box.completion_extends_text()
-            and len(box.autocomplete_text) > len(box.edit_text)
-        ):
+        if self.selected_note is not None and self.search_box.completion_is_longer():
             self.select(None)
             return None
         return self._edit_search(size, "backspace", autoselect=False)
@@ -869,23 +872,22 @@ class MainFrame(urwid.Frame):
         if keep is not None and self.list_box.list_walker.position_of(keep) is not None:
             self.select(keep)
         elif autoselect and query:
-            self.select(autoselection(results, query))
+            self.select(autoselection(results))
         else:
             self.select(None)
 
 
-def autoselection(results, query):
-    """The note of the first of `results` if it is an exact match whose title starts
-    with `query`, ignoring case and Unicode normalisation; else None.
+def autoselection(results):
+    """The note of the first of `results` if its title starts with the query
+    (`Result.prefix`), else None.
 
-    Notes found only by fuzzy matching are never autoselected, so fuzzy
-    matching changes neither which note Enter opens nor whether it creates one.
+    Notes found only by fuzzy or body matching are never autoselected, so
+    they change neither which note Enter opens nor whether it creates one.
+    The search box shows the note's title as a completion of the query.
     """
-    if not results:
-        return None
-    top = results[0]
-    prefix = unicodedata.normalize("NFC", query).casefold()
-    return top.note if top.exact and top.note.title.casefold().startswith(prefix) else None
+    if results and results[0].prefix:
+        return results[0].note
+    return None
 
 
 def call_with_interrupts_ignored(command):

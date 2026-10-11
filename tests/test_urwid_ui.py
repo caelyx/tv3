@@ -7,7 +7,9 @@ executable (the `stub_editor` fixture). The only stand-in is the terminal:
 canvases urwid draws, so a real `urwid_ui.MainLoop` can run headless.
 """
 
+import contextlib
 import os
+import random
 import select
 import signal
 import sys
@@ -42,6 +44,7 @@ from tests.ui_helpers import (
     type_text,
 )
 from tv3 import tv_notebook, urwid_ui
+from tv3.ranking import prefix_length
 
 
 class TestNoteWidget:
@@ -110,6 +113,18 @@ class TestAutocompleteWidget:
         canvas = widget.render((8,))
         assert canvas.text == [b"defghijk"]
         assert canvas.cursor == (7, 0)
+
+    @pytest.mark.parametrize(
+        ("typed", "drawn", "cursor"),
+        [("\u0303", "", 0), ("\u0303\u0301", "", 0), ("a\u0303", "a\u0303", 1)],
+    )
+    def test_combining_characters_without_a_base_draw_as_nothing(self, typed, drawn, cursor):
+        widget = urwid_ui.AutocompleteWidget(edit_text=typed)
+
+        canvas = widget.render((20,))
+
+        assert canvas.text[0].decode().rstrip() == drawn
+        assert canvas.cursor == (cursor, 0)
 
     def test_consume_turns_completion_into_text_with_cursor_at_end(self):
         widget = urwid_ui.AutocompleteWidget(edit_text="hel")
@@ -245,6 +260,15 @@ class TestFilteringAndRendering:
         assert frame.search_box.edit_text == "ist"
         assert highlighted(frame) == []
 
+    def test_title_of_only_a_combining_character(self, make_frame):
+        frame = make_frame({"\u0303.txt": "", "zed.txt": ""})
+
+        assert list_lines(frame) == ["zed"]
+
+        press(frame, "down", "down")
+        assert frame.selected_note.title == "\u0303"
+        assert search_line(frame) == ""
+
     def test_unicode_search(self, make_frame):
         frame = make_frame({"greeting.txt": "こんにちは", "other.txt": "hello"})
         type_text(frame, "こんにちは")
@@ -260,6 +284,123 @@ class TestFilteringAndRendering:
     def test_empty_notebook_placeholder(self, make_frame):
         frame = make_frame()
         assert "You have no notes yet" in "\n".join(screen_lines(frame))
+
+
+class TestCaselessPrefix:
+    """A title that starts with the typed text, ignoring case, is selected and
+    shown as a completion of it, however case folding changes its length."""
+
+    def test_typing_through_a_title_that_folds_longer(self, make_frame):
+        frame = make_frame({"Straße.txt": "strasse plan", "zed.txt": ""})
+        type_text(frame, "strasse")
+
+        assert frame.search_box.edit_text == "strasse"
+        assert highlighted(frame) == ["Straße"]
+        assert search_line(frame) == "Straße"
+
+    def test_typing_past_a_ligature_title(self, make_frame):
+        frame = make_frame({"\ufb01le.txt": "file list", "zed.txt": ""})
+        type_text(frame, "file")
+        assert highlighted(frame) == ["\ufb01le"]
+
+        type_text(frame, "s")
+
+        assert frame.search_box.edit_text == "files"
+        assert highlighted(frame) == []
+
+    def test_backspace_removes_only_the_completion_of_a_folded_title(self, make_frame):
+        frame = make_frame({"Straße.txt": "", "zed.txt": ""})
+        type_text(frame, "strass")
+        assert highlighted(frame) == ["Straße"]
+        assert search_line(frame) == "Straße"
+
+        press(frame, "backspace")
+
+        assert frame.search_box.edit_text == "strass"
+        assert highlighted(frame) == []
+        assert search_line(frame) == "strass"
+
+    def test_typed_text_in_another_case_opens_the_existing_note(
+        self, make_frame, stub_editor, notes_dir
+    ):
+        frame = make_frame({"foo.txt": "", "zed.txt": ""})
+        type_text(frame, "Foo")
+        assert highlighted(frame) == ["foo"]
+
+        press(frame, "enter")
+
+        assert stub_editor.calls() == [[str(notes_dir / "foo.txt")]]
+        assert sorted(p.name for p in notes_dir.iterdir()) == ["foo.txt", "zed.txt"]
+
+    def test_single_character_in_another_case(self, make_frame):
+        frame = make_frame({"ñ.txt": "", "zed.txt": ""})
+        type_text(frame, "Ñ")
+
+        assert list_titles(frame) == ["ñ"]
+        assert highlighted(frame) == ["ñ"]
+
+    ALPHABET = ("a", "A", "s", "S", "ß", "ẞ", "i", "I", "\u0130", "\u0131", "\ufb01", "f", "ǅ")
+    ALPHABET += ("n", "\u0303", "ñ", "Ñ", "e", "\u0301", "é", "o", "J", "\u030c", "x")
+
+    def test_selection_and_completion_agree_with_the_prefix_rule(self, make_frame, notes_dir):
+        """Over random typing in a notebook of titles that case folding
+        changes the length of: a note is selected exactly when a result is
+        flagged `prefix`, which is exactly when `prefix_length` says its
+        title starts with the typed text; the selected note is the top row
+        and the search box shows it as a completion of the typed text; and
+        the next key typed is added to the typed text unchanged.
+        """
+        rng = random.Random(11)
+
+        def word():
+            return "".join(rng.choice(self.ALPHABET) for _ in range(rng.randint(1, 5)))
+
+        for i in range(40):
+            title = unicodedata.normalize("NFC", " ".join(word() for _ in range(rng.randint(1, 2))))
+            form = rng.choice(["NFC", "NFD"])
+            with contextlib.suppress(FileExistsError, OSError):
+                path = notes_dir / (unicodedata.normalize(form, title) + ".txt")
+                with open(path, "x") as f:
+                    f.write(word() + " " + title)
+                os.utime(path, (1_700_000_000 + i, 1_700_000_000 + i))
+        frame = make_frame()
+        notes = list(frame.tv_notebook)
+        assert len(notes) > 30
+
+        selected = 0
+        for _ in range(150):
+            while frame.selected_note is not None or frame.search_box.edit_text:
+                press(frame, "esc")
+            if rng.random() < 0.6:
+                title = rng.choice(notes).title
+                typed = title[: rng.randint(1, min(5, len(title)))]
+                typed = rng.choice([typed, typed.swapcase(), unicodedata.normalize("NFD", typed)])
+            else:
+                typed = word()
+            type_text(frame, typed)
+            context = (typed, frame.search_box.edit_text, frame.selected_note)
+
+            assert frame.search_box.edit_text == typed, context
+            results = frame.tv_notebook.find(typed)
+            prefixed = {r.note for r in results if r.prefix}
+            assert prefixed == {
+                n for n in frame.tv_notebook if prefix_length(n.title, typed) is not None
+            }, context
+            note = frame.selected_note
+            if prefixed:
+                selected += 1
+                assert note is results[0].note and note in prefixed, context
+                assert list_titles(frame)[0] == note.title.strip(), context
+                assert frame.search_box.completion_extends_text(), context
+                assert search_line(frame) == note.title.strip(), context
+            else:
+                assert note is None, context
+                assert search_line(frame) == typed.strip(), context
+
+            extra = rng.choice(self.ALPHABET)
+            type_text(frame, extra)
+            assert frame.search_box.edit_text == typed + extra, context
+        assert selected > 50
 
 
 class TestEscapeAndQuit:
@@ -487,7 +628,7 @@ class TestEnter:
             pytest.skip("needs a case-insensitive filesystem")
         (notes_dir / "probe").unlink()
         frame = make_frame({"existing.txt": "", "other.txt": ""})
-        type_text(frame, "Existing")
+        type_text(frame, "Existing ")
         assert highlighted(frame) == []
 
         press(frame, "enter")
@@ -1176,19 +1317,20 @@ class TestHighlighting:
         assert highlighted(frame) == ["fox"]
         assert search_line(frame) == "fox"
 
-    def test_top_row_the_exact_search_does_not_find_is_not_selected(self, make_frame):
-        frame = make_frame({"Existing.txt": "", "zed.txt": ""})
-        type_text(frame, "eXi")
+    @pytest.mark.parametrize(("title", "typed"), [("Existing", "eXi"), ("existing", "Exi")])
+    def test_prefix_in_another_case_is_selected(self, make_frame, title, typed):
+        frame = make_frame({title + ".txt": "", "zed.txt": ""})
+        type_text(frame, typed)
 
-        assert list_lines(frame) == ["Existing"]
-        assert highlighted(frame) == []
-        assert search_line(frame) == "eXi"
+        assert list_lines(frame) == [title]
+        assert highlighted(frame) == [title]
+        assert search_line(frame) == title
 
     def test_fuzzy_match_with_another_case_is_not_autoselected(self, make_frame):
-        frame = make_frame({"existing.txt": "", "zed.txt": ""})
+        frame = make_frame({"an existing note.txt": "", "zed.txt": ""})
         type_text(frame, "Exi")
 
-        assert list_lines(frame) == ["existing"]
+        assert list_lines(frame) == ["an existing note"]
         assert highlighted(frame) == []
         assert search_line(frame) == "Exi"
 
