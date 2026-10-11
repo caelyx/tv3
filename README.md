@@ -15,42 +15,31 @@ and a port from Legacy Python to **Python 3**.
 
 ## Installation
 
-### User site installation
-
-This installs to `~/.local/`.  It doesn't need root privileges and keeps
-your system-wide Python installation clean.  If you want to install
-system-wide, drop the `--user` flag and prepend `sudo -H` to `pip3`.
+TV3 is installed as a [uv](https://docs.astral.sh/uv/) tool, which gives it
+its own isolated environment and puts `tv3` on your `$PATH`:
 
 ```bash
-git clone https://github.com/caelyx/tv3 # Updated to reflect this fork
-cd tv3
-pip3 install --user .
-cd ..
-rm -rf tv3
+uv tool install git+https://github.com/caelyx/tv3
 ```
 
-### Installation in a Python virtual environment
-
-The code currently depends on Urwid version 2.1.2 (pinned for compatibility).
-If you have other applications depending on a different Urwid version in the
-same Python environment, you may encounter dependency conflicts, because
-Python doesn't support multiple versions of a package in the same environment.
-
-The solution is to install TV3 in its own virtual Python environment and
-symlink it to `~/.local/bin/` (or any other directory in your `$PATH`).
-If you are a pythonista and familiar with the command line you probably
-know how to do this.  Otherwise just follow these instructions.
-
-This uses [uv](https://docs.astral.sh/uv/). `uv pip install` targets the
-`.venv` in the current directory, so there is no need to activate it. If
-another virtual environment is already active, `uv` installs into that one
-instead; run `deactivate` first.
+Or from a clone:
 
 ```bash
-git clone https://github.com/caelyx/tv3 ~/.tv3
-cd ~/.tv3
-uv venv
-uv pip install .
-mkdir -p ~/.local/bin/
-ln -s ~/.tv3/.venv/bin/tv3 ~/.local/bin/
+git clone https://github.com/caelyx/tv3
+cd tv3
+uv tool install .
+```
+
+To upgrade later:
+
+```bash
+uv tool upgrade tv3
+```
+
+## Development
+
+```bash
+uv sync          # create .venv with tv3 and the dev tools
+uv run tv3       # run the app from the checkout
+uv run pytest    # run the test suite
 ```

@@ -4,69 +4,62 @@ This directory contains comprehensive tests for Terminal Velocity 3.
 
 ## Installation
 
-Install test dependencies:
+Create the development environment (tv3 plus the dev dependency group) from `uv.lock`:
 
 ```bash
-uv venv
-uv pip install -e ".[test]"
-```
-
-Or install manually:
-
-```bash
-uv pip install pytest pytest-cov pytest-mock
+uv sync
 ```
 
 ## Running Tests
 
 ### Run all tests:
 ```bash
-pytest
+uv run pytest
 ```
 
 ### Run specific test file:
 ```bash
-pytest tests/test_tv_notebook.py
-pytest tests/test_terminal_velocity.py
-pytest tests/test_urwid_ui.py
-pytest tests/test_integration.py
+uv run pytest tests/test_tv_notebook.py
+uv run pytest tests/test_terminal_velocity.py
+uv run pytest tests/test_urwid_ui.py
+uv run pytest tests/test_integration.py
 ```
 
 ### Run specific test class:
 ```bash
-pytest tests/test_tv_notebook.py::TestPlainTextNote
+uv run pytest tests/test_tv_notebook.py::TestPlainTextNote
 ```
 
 ### Run specific test:
 ```bash
-pytest tests/test_tv_notebook.py::TestPlainTextNote::test_note_creation
+uv run pytest tests/test_tv_notebook.py::TestPlainTextNote::test_note_creation
 ```
 
 ### Run with coverage:
 ```bash
-pytest --cov=src --cov-report=html
+uv run pytest --cov=src/tv3 --cov-report=html
 ```
 
 Then open `htmlcov/index.html` in a browser to view coverage report.
 
 ### Run only fast tests (skip slow integration tests):
 ```bash
-pytest -m "not slow"
+uv run pytest -m "not slow"
 ```
 
 ### Run with verbose output:
 ```bash
-pytest -v
+uv run pytest -v
 ```
 
 ### Run and stop at first failure:
 ```bash
-pytest -x
+uv run pytest -x
 ```
 
 ### Run last failed tests:
 ```bash
-pytest --lf
+uv run pytest --lf
 ```
 
 ## Test Organization
@@ -178,7 +171,7 @@ def test_with_temp_dir(temp_notes_dir):
 
 ### Mocking UI Components
 ```python
-@patch("urwid_ui.system")
+@patch("tv3.urwid_ui.system")
 def test_ui_action(mock_system, temp_notes_dir):
     """Mock external commands to test UI without side effects."""
     frame = urwid_ui.MainFrame(temp_notes_dir, "vim", ".txt", [".txt"])

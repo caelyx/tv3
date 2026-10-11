@@ -12,7 +12,7 @@ This document tracks improvements identified in the comprehensive codebase revie
 ## CRITICAL Priority (Do First)
 
 ### 2. Add Path Traversal Protection 🔒
-**Location:** `src/tv_notebook.py:200-222`
+**Location:** `src/tv3/tv_notebook.py:200-222`
 **Issue:** No validation to prevent creating notes outside the notes directory using `../` in titles.
 **Security Risk:** HIGH - files could be created anywhere the user has write permissions.
 
@@ -33,7 +33,7 @@ if not abspath.startswith(os.path.realpath(self.path)):
 ---
 
 ### 3. Fix Watchdog Observer Cleanup 🧹
-**Location:** `src/tv_notebook.py:174-177`
+**Location:** `src/tv3/tv_notebook.py:174-177`
 **Issue:** Observer thread is never stopped or cleaned up.
 **Impact:** Thread leaks; prevents proper shutdown.
 
@@ -65,7 +65,7 @@ def __exit__(self, exc_type, exc_val, exc_tb):
 ---
 
 ### 4. Re-enable Error Handling in main()
-**Location:** `src/terminal_velocity.py:140`
+**Location:** `src/tv3/terminal_velocity.py:140`
 **Issue:** The try/except block is commented out, so errors crash the app ungracefully.
 **Impact:** Poor user experience; no error recovery.
 
@@ -93,16 +93,16 @@ except Exception as e:
 ---
 
 ### 5. Pin All Dependencies Consistently 📌
-**Files:** `requirements.txt` vs `setup.py`
+**Files:** `pyproject.toml`, `uv.lock`
 **Issue:** Inconsistent version pinning; `watchdog` not pinned at all.
 **Impact:** Unpredictable behavior across environments.
 
 **Action Items:**
-- [ ] Pin `watchdog` version in setup.py (e.g., `watchdog>=2.0.0,<5.0.0`)
-- [ ] Ensure requirements.txt matches setup.py
+- [x] Pin `watchdog` version in pyproject.toml (`watchdog>=2.0.0,<5.0.0`)
+- [x] Declare dependencies only in pyproject.toml
 - [ ] Document why urwid is pinned to 2.1.2
 - [ ] Test with specified versions
-- [ ] Consider using `pip-tools` for dependency management
+- [x] Lock dependencies with uv (`uv.lock`)
 
 ---
 
@@ -189,12 +189,12 @@ except Exception as e:
 ```yaml
 - name: Run tests with coverage
   run: |
-    pip install -e ".[test]"
-    pytest --cov=src --cov-report=xml --cov-report=term-missing --cov-fail-under=80
+    uv sync --locked
+    uv run pytest --cov=src/tv3 --cov-report=xml --cov-report=term-missing --cov-fail-under=80
 - name: Upload coverage
-  uses: codecov/codecov-action@v4
+  uses: codecov/codecov-action@v7
   with:
-    file: ./coverage.xml
+    files: ./coverage.xml
 ```
 
 ---
@@ -203,7 +203,7 @@ except Exception as e:
 
 **Action Items:**
 
-#### a) Fix README.md vs setup.py contradiction
+#### a) Fix README.md vs pyproject.toml contradiction
 - [ ] Update README.md line 34 (says urwid 1.1.1, should be 2.1.2)
 - [ ] Document why urwid is pinned to 2.1.2
 
@@ -332,7 +332,7 @@ def brute_force_search(notebook: PlainTextNoteBook, query: str) -> List[PlainTex
 **Issue:** No automated code quality checks.
 
 **Action Items:**
-- [ ] Install pre-commit: `pip install pre-commit`
+- [ ] Install pre-commit: `uv tool install pre-commit`
 - [ ] Create `.pre-commit-config.yaml`
 - [ ] Add ruff (replaces flake8)
 - [ ] Add black for formatting
@@ -441,12 +441,12 @@ assert wait_for_condition(lambda: len(notebook) == expected_count)
 ### 18. Add `__version__` to `__init__.py`
 
 **Action Items:**
-- [ ] Add version string to `src/__init__.py`
+- [ ] Add version string to `src/tv3/__init__.py`
 - [ ] Add author information
 - [ ] Add package docstring
 - [ ] Define `__all__` for clean imports
 - [ ] Consider using single-source versioning
-- [ ] Update setup.py to read version from `__init__.py`
+- [ ] Keep the version in pyproject.toml and `__init__.py` in sync
 - [ ] Add version display to CLI (`--version` flag)
 
 **Implementation:**

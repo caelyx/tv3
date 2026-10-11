@@ -8,20 +8,21 @@ Terminal Velocity 3 (tv3) is a TUI (Text User Interface) application for managin
 
 ## Architecture
 
-The codebase is organized into three main modules in `src/`:
+The codebase is the `tv3` package in `src/tv3/`, organized into three main modules
+(`__main__.py` makes `python -m tv3` run the CLI):
 
-1. **terminal_velocity.py** - Entry point and CLI argument handling
+1. **src/tv3/terminal_velocity.py** - Entry point and CLI argument handling
    - Parses command-line arguments and config file (`~/.tvrc`)
    - Sets up logging to `~/.tvlog`
    - Launches the urwid UI with configured parameters
 
-2. **tv_notebook.py** - Data layer for note storage and search
+2. **src/tv3/tv_notebook.py** - Data layer for note storage and search
    - `PlainTextNoteBook`: Manages a directory of plain text notes
    - `PlainTextNote`: Represents individual note files
    - `brute_force_search()`: Implements case-sensitive/insensitive search across note titles and contents
    - `FileEventHandler`: Uses watchdog library to monitor filesystem changes and automatically sync notes in real-time
 
-3. **urwid_ui.py** - Terminal UI layer
+3. **src/tv3/urwid_ui.py** - Terminal UI layer
    - `MainFrame`: Top-level widget coordinating the UI
    - `AutocompleteWidget`: Search box with autocomplete functionality
    - `NoteFilterListBox`: Filterable list of notes
@@ -37,25 +38,31 @@ The codebase is organized into three main modules in `src/`:
 
 ## Installation and Development
 
-### Install dependencies:
+Packaging is pyproject-only with the `uv_build` backend; dependencies are locked in `uv.lock`.
+
+### Set up the development environment:
 ```bash
-pip3 install --user .
+uv sync
 ```
 
-Or in a virtual environment:
+### Run the application from the checkout:
 ```bash
-uv venv
-uv pip install .
+uv run tv3 [options] [notes_dir]
+uv run python -m tv3 [options] [notes_dir]
 ```
 
-### Run the application:
+### Install as a tool:
 ```bash
-python3 -m terminal_velocity [options] [notes_dir]
-```
-
-Or after installation:
-```bash
+uv tool install .
 tv3 [options] [notes_dir]
+```
+
+### Test, lint, type-check:
+```bash
+uv run pytest
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy src
 ```
 
 ### Configuration

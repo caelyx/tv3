@@ -2,26 +2,22 @@
 
 ## Overview
 
-A comprehensive test suite has been created for Terminal Velocity 3 using pytest. The suite includes **150+ tests** covering unit tests, integration tests, and regression tests for previously fixed bugs.
+A comprehensive test suite has been created for Terminal Velocity 3 using pytest. The suite includes **142 tests** covering unit tests, integration tests, and regression tests for previously fixed bugs.
 
 ## Quick Start
 
 ### 1. Install Dependencies
 
 ```bash
-# Create a virtual environment and install the package with test dependencies
-uv venv
-uv pip install -e ".[test]"
-
-# Or install dependencies separately
-uv pip install urwid==2.1.2 watchdog pytest pytest-cov pytest-mock
+# Create .venv with tv3 (editable) and the dev dependency group
+uv sync
 ```
 
 ### 2. Run Tests
 
 ```bash
 # Run all tests
-pytest
+uv run pytest
 
 # Or use the convenience script
 ./run_tests.sh
@@ -36,12 +32,12 @@ tests/
 ├── __init__.py              # Test package marker
 ├── README.md                # Detailed testing documentation
 ├── conftest.py              # Shared fixtures and configuration
-├── test_tv_notebook.py      # Tests for data layer (89 tests)
-├── test_terminal_velocity.py # Tests for CLI/config (37 tests)
-├── test_urwid_ui.py         # Tests for UI components (31 tests)
-└── test_integration.py      # Integration tests (23 tests)
+├── test_tv_notebook.py      # Tests for data layer (38 tests)
+├── test_terminal_velocity.py # Tests for CLI/config (33 tests)
+├── test_urwid_ui.py         # Tests for UI components (51 tests)
+└── test_integration.py      # Integration tests (20 tests)
 
-pytest.ini                   # Pytest configuration
+pyproject.toml               # Pytest configuration ([tool.pytest.ini_options])
 run_tests.sh                 # Convenience test runner script
 TESTING.md                   # This file
 ```
@@ -52,10 +48,10 @@ TESTING.md                   # This file
 
 | Module | Test File | # Tests | Coverage Areas |
 |--------|-----------|---------|----------------|
-| `tv_notebook.py` | `test_tv_notebook.py` | 89 | Note creation, search, file watching, threading |
-| `terminal_velocity.py` | `test_terminal_velocity.py` | 37 | CLI args, config files, logging |
-| `urwid_ui.py` | `test_urwid_ui.py` | 31 | UI widgets, keyboard shortcuts, editor launching |
-| Integration | `test_integration.py` | 23 | End-to-end workflows, concurrency |
+| `tv_notebook.py` | `test_tv_notebook.py` | 38 | Note creation, search, file watching, threading |
+| `terminal_velocity.py` | `test_terminal_velocity.py` | 33 | CLI args, config files, logging |
+| `urwid_ui.py` | `test_urwid_ui.py` | 51 | UI widgets, keyboard shortcuts, editor launching |
+| Integration | `test_integration.py` | 20 | End-to-end workflows, concurrency |
 
 ### What's Tested
 
@@ -96,32 +92,32 @@ TESTING.md                   # This file
 
 ```bash
 # All tests
-pytest
+uv run pytest
 
 # Specific test file
-pytest tests/test_tv_notebook.py
+uv run pytest tests/test_tv_notebook.py
 
 # Specific test class
-pytest tests/test_tv_notebook.py::TestPlainTextNote
+uv run pytest tests/test_tv_notebook.py::TestPlainTextNote
 
 # Specific test
-pytest tests/test_tv_notebook.py::TestPlainTextNote::test_note_creation
+uv run pytest tests/test_tv_notebook.py::TestPlainTextNote::test_note_creation
 
 # Verbose output
-pytest -v
+uv run pytest -v
 
 # Stop on first failure
-pytest -x
+uv run pytest -x
 
 # Run last failed
-pytest --lf
+uv run pytest --lf
 ```
 
 ### With Coverage
 
 ```bash
 # Run with coverage report
-pytest --cov=src --cov-report=html --cov-report=term-missing
+uv run pytest --cov=src/tv3 --cov-report=html --cov-report=term-missing
 
 # Or use the script
 ./run_tests.sh coverage
@@ -192,8 +188,8 @@ These tests are CI-ready:
 
 ```bash
 # In CI pipeline
-pip install -e ".[test]"
-pytest --cov=src --cov-report=xml
+uv sync --locked
+uv run pytest --cov=src/tv3 --cov-report=xml
 ```
 
 ## Writing New Tests
@@ -252,29 +248,20 @@ Potential areas for additional testing:
 
 When contributing:
 1. Write tests for new features
-2. Ensure all tests pass: `pytest`
+2. Ensure all tests pass: `uv run pytest`
 3. Check coverage: `./run_tests.sh coverage`
 4. Add integration tests for complex features
 5. Document new fixtures or patterns
 
 ## Troubleshooting
 
-### Tests won't run
+### Tests won't run / import errors
 ```bash
-# Check dependencies
-uv pip install -e ".[test]"
+# From the project root, recreate the environment from uv.lock
+uv sync
 
 # Verify pytest installation
-python3 -m pytest --version
-```
-
-### Import errors
-```bash
-# Ensure you're in the project root
-cd /path/to/tv3
-
-# Install in development mode
-uv pip install -e .
+uv run pytest --version
 ```
 
 ### Timing failures
@@ -287,7 +274,7 @@ uv pip install -e .
 ## Summary
 
 A comprehensive test suite with:
-- **180+ total tests**
+- **142 total tests**
 - **4 test modules** (unit + integration)
 - **Extensive fixtures** for common scenarios
 - **Coverage reporting** configured
