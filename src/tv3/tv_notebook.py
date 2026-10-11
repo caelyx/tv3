@@ -2,10 +2,12 @@
 
 import logging
 import os
+import stat
 import tempfile
 import threading
 import unicodedata
 from collections.abc import Callable, Iterable, Iterator
+from typing import NamedTuple
 
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
@@ -124,13 +126,39 @@ def _path_limit(path: str, name: str) -> int | None:
     return limit if limit > 0 else None
 
 
+class _Stat(NamedTuple):
+    """A note file's modification time, before its contents have been read."""
+
+    mtime: float
+
+
+class _Contents(NamedTuple):
+    """A note file as it was when last read.
+
+    `text` is the title, a newline and the contents; `folded` is the
+    lowercased title and the lowercased contents, joined the same way. A
+    search word never contains whitespace, so it occurs in `text` exactly
+    when it occurs in the title or in the contents.
+    """
+
+    mtime: float
+    text: str
+    folded: str
+
+
 class PlainTextNote:
-    """A note, stored as a plain text file on disk."""
+    """A note, stored as a plain text file on disk.
+
+    `contents` and `mtime` come from an in-memory copy of the file, read on
+    first use. The notebook re-reads it when its watcher reports a change.
+    """
 
     def __init__(self, title: str, notebook: "PlainTextNoteBook", extension: str):
         self._title = title
         self._extension = extension
         self._abspath = os.path.join(notebook.path, title + extension)
+        self._lock = notebook._notes_lock
+        self._cached: _Stat | _Contents | None = None
 
     @property
     def title(self) -> str:
@@ -146,22 +174,66 @@ class PlainTextNote:
 
     @property
     def contents(self) -> str:
-        """Read and return the contents of the note file."""
-        try:
-            with open(self.abspath, "rb") as fp:
-                return fp.read().decode("utf-8", errors="replace")
-        except OSError as e:
-            logger.error(f"Error reading note {self.abspath}: {e}")
-            return ""
+        """The contents of the note file, decoded as UTF-8."""
+        return self._loaded().text[len(self._title) + 1 :]
 
     @property
     def mtime(self) -> float:
-        """Get the modification time of the note file."""
+        """The modification time of the note file."""
+        cached = self._cached
+        if cached is None:
+            cached = self._stat()
+            self._store_if_unchanged(None, cached)
+        return cached.mtime
+
+    def _loaded(self) -> _Contents:
+        """The cached file, reading it first if it has not been read."""
+        cached = self._cached
+        if isinstance(cached, _Contents):
+            return cached
+        contents = self._read()
+        self._store_if_unchanged(cached, contents)
+        return contents
+
+    def _refresh(self) -> bool:
+        """Re-read the note file. Returns True if its mtime or contents changed."""
+        new = self._read()
+        with self._lock:
+            old, self._cached = self._cached, new
+        if old is None or old.mtime != new.mtime:
+            return True
+        return isinstance(old, _Contents) and old.text != new.text
+
+    def _store_if_unchanged(self, seen: _Stat | _Contents | None, new: _Stat | _Contents) -> None:
+        """Cache `new` unless the cache has changed since it was `seen`.
+
+        A read that raced with `_refresh` must not overwrite what `_refresh`
+        stored, which is at least as recent.
+        """
+        with self._lock:
+            if self._cached is seen:
+                self._cached = new
+
+    def _stat(self) -> _Stat:
         try:
-            return os.path.getmtime(self.abspath)
+            return _Stat(os.stat(self._abspath).st_mtime)
         except OSError as e:
-            logger.error(f"Error getting mtime for {self.abspath}: {e}")
-            return 0.0
+            logger.error(f"Error getting mtime for {self._abspath}: {e}")
+            return _Stat(0.0)
+
+    def _read(self) -> _Contents:
+        try:
+            with open(self._abspath, "rb") as fp:
+                mtime = os.fstat(fp.fileno()).st_mtime
+                contents = fp.read().decode("utf-8", errors="replace")
+        except OSError as e:
+            logger.error(f"Error reading note {self._abspath}: {e}")
+            mtime, contents = 0.0, ""
+        return _Contents(
+            mtime,
+            self._title + "\n" + contents,
+            self._title.lower() + "\n" + contents.lower(),
+        )
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, PlainTextNote):
@@ -185,23 +257,23 @@ def brute_force_search(notebook, query):
     Returns:
         List of PlainTextNote objects that match all search terms.
 
-    The search is case-insensitive if all search words are lowercase,
-    otherwise it's case-sensitive. All words must match (AND operation).
+    Every word must occur in the note's title or contents (AND). A word that
+    is all lowercase matches case-insensitively, any other word matches
+    case-sensitively. Searches the notes' cached contents; it reads only
+    notes that have not been read yet.
     """
-    search_words = query.strip().split()
+    words = [(word, word.islower()) for word in query.split()]
+    if not words:
+        return list(notebook)
     matching_notes = []
     for note in notebook:
-        match = True
-        for search_word in search_words:
-            if search_word.islower():
-                in_title = search_word in note.title.lower()
-                in_contents = search_word in note.contents.lower()
-            else:
-                in_title = search_word in note.title
-                in_contents = search_word in note.contents
-            if (not in_title) and (not in_contents):
-                match = False
-        if match:
+        cached = note._cached
+        if not isinstance(cached, _Contents):
+            cached = note._loaded()
+        for word, fold in words:
+            if word not in (cached.folded if fold else cached.text):
+                break
+        else:
             matching_notes.append(note)
     return matching_notes
 
@@ -221,6 +293,13 @@ class PlainTextNoteBook:
 
     If the notebook directory is deleted or moved, every note is dropped, an
     error is logged and the watcher stops; a new notebook must be opened.
+
+    Each note keeps its contents and mtime in memory, so a search reads no
+    files. A background thread reads every note after the initial scan, and
+    `search` waits for it; a search reads any note added later that has not
+    been read yet. Watcher events re-read the note they name, and `refresh`
+    re-reads one at once. A change the watcher does not report is not seen
+    until the next event for that file.
 
     `on_change`, if set, is called with no arguments from the watcher thread
     after an event that added, removed or modified a note.
@@ -256,6 +335,9 @@ class PlainTextNoteBook:
         self._notes: dict[str, PlainTextNote] = {}
         self._notes_lock = threading.Lock()
 
+        self._closed = threading.Event()
+        self._warmer: threading.Thread | None = None
+
         self._observer: BaseObserver | None = Observer()
         self._observer.schedule(FileEventHandler(self), self._path, recursive=True)
         self._observer.start()
@@ -264,6 +346,8 @@ class PlainTextNoteBook:
         except BaseException:
             self.close()
             raise
+        self._warmer = threading.Thread(target=self._read_all, name="tv3-read-notes", daemon=True)
+        self._warmer.start()
 
     @staticmethod
     def _dotted(ext: str) -> str:
@@ -274,8 +358,31 @@ class PlainTextNoteBook:
         return self._path
 
     def search(self, query):
-        """Return a sequence of Notes that match the given query."""
+        """Return a list of the notes that match the given query.
+
+        Waits for the background read of the notes to finish first: reading
+        them on this thread as well would duplicate work and be slower.
+        """
+        warmer = self._warmer
+        if warmer is not None:
+            warmer.join()
         return self.search_function(self, query)
+
+    def refresh(self, note: PlainTextNote) -> bool:
+        """Re-read `note`'s file now instead of waiting for the watcher.
+
+        For changes this process knows about, such as the editor exiting.
+        Returns True if the notebook has a note at `note.abspath` and its
+        mtime or contents changed.
+        """
+        return self._refresh(note.abspath)
+
+    def _read_all(self) -> None:
+        """Read every note not read yet, until done or the notebook is closed."""
+        for note in self:
+            if self._closed.is_set():
+                return
+            note._loaded()
 
     def create(self, title: str) -> PlainTextNote:
         """Create an empty note file for `title` and add it to the notebook.
@@ -297,6 +404,8 @@ class PlainTextNoteBook:
             raise InvalidNoteTitleError("Note title contains a NUL character")
         if os.path.isabs(title):
             raise InvalidNoteTitleError(f"Note title is an absolute path: {title}")
+        if title.endswith(os.sep) or (os.altsep is not None and title.endswith(os.altsep)):
+            raise InvalidNoteTitleError(f"Invalid note title: ends with a path separator: {title}")
         typed_relpath = title if self._has_extension(title) else title + self.extension
         reason = self._rejection(typed_relpath)
         if reason is None and _is_editor_temp(os.path.basename(title)):
@@ -325,6 +434,7 @@ class PlainTextNoteBook:
                 raise NoteAlreadyExistsError(f"Note already exists: {existing.title}", existing)
             self._write_empty_file(abspath, relpath)
             note = self._add_locked(self._on_disk_relpath(relpath))
+            note._cached = note._read()
         logger.debug(f"Created note {abspath}")
         return note
 
@@ -423,17 +533,21 @@ class PlainTextNoteBook:
             return None
         return os.path.relpath(os.path.join(real_parent, os.path.basename(abspath)), self._path)
 
-    def _indexable_relpath(self, abspath: str, real_parent: str | None = None) -> str | None:
-        """The relative path of `abspath` if it is a note file to index, else None.
+    def _indexable(self, abspath: str, real_parent: str | None = None) -> tuple[str, float] | None:
+        """The relative path and mtime of `abspath` if it is a note file to index, else None.
 
         The one test of what is a note, shared by the scan and the watcher.
         """
         relpath = self._relpath(abspath, real_parent)
         if relpath is None or relpath == os.curdir or self._rejection(relpath) is not None:
             return None
-        if os.path.islink(abspath) or not os.path.isfile(abspath):
+        try:
+            st = os.lstat(abspath)
+        except OSError:
             return None
-        return relpath
+        if not stat.S_ISREG(st.st_mode):
+            return None
+        return relpath, st.st_mtime
 
     def _add_locked(self, relpath: str) -> PlainTextNote:
         title, extension = os.path.splitext(relpath)
@@ -446,14 +560,24 @@ class PlainTextNoteBook:
 
         Returns True if a note was added.
         """
-        relpath = self._indexable_relpath(abspath, real_parent)
-        if relpath is None:
+        indexable = self._indexable(abspath, real_parent)
+        if indexable is None:
             return False
+        relpath, mtime = indexable
         with self._notes_lock:
             if self._key(relpath) in self._notes:
                 return False
-            self._add_locked(relpath)
+            self._add_locked(relpath)._cached = _Stat(mtime)
         return True
+
+    def _refresh(self, abspath: str) -> bool:
+        """Re-read the note at `abspath`, if tracked. Returns True if it changed."""
+        relpath = self._relpath(abspath)
+        if relpath is None:
+            return False
+        with self._notes_lock:
+            note = self._notes.get(self._key(relpath))
+        return note is not None and note._refresh()
 
     def _unregister(self, abspath: str, only_if_missing: bool = False) -> bool:
         """Stop tracking the note at `abspath`. Returns True if one was removed.
@@ -518,21 +642,18 @@ class PlainTextNoteBook:
             f"Notes directory {self._path} was deleted or moved; no longer watching it for changes"
         )
 
-    def _is_registered(self, abspath: str) -> bool:
-        relpath = self._relpath(abspath)
-        if relpath is None:
-            return False
-        with self._notes_lock:
-            return self._key(relpath) in self._notes
-
     def _notify(self) -> None:
         if self.on_change is not None:
             self.on_change()
 
     def close(self) -> None:
         """Stop the file watcher. Safe to call more than once, from any thread."""
+        self._closed.set()
         with self._notes_lock:
             observer, self._observer = self._observer, None
+            warmer, self._warmer = self._warmer, None
+        if warmer is not None and threading.current_thread() is not warmer:
+            warmer.join()
         if observer is None:
             return
         logger.debug("Stopping file observer")
@@ -583,8 +704,15 @@ class FileEventHandler(FileSystemEventHandler):
             logger.exception(f"Error handling {event.event_type} event for {event.src_path!r}")
 
     def _added(self, path: str, is_directory: bool) -> bool:
+        """Track the note or notes at `path` and re-read a tracked note file.
+
+        Returns True if a note was added or a note file changed.
+        """
         nb = self._notebook
-        return nb._register_tree(path) if is_directory else nb._register(path)
+        if is_directory:
+            return nb._register_tree(path)
+        added = nb._register(path)
+        return nb._refresh(path) or added
 
     def _removed(self, path: str, is_directory: bool, only_if_missing: bool = False) -> bool:
         nb = self._notebook
@@ -611,7 +739,7 @@ class FileEventHandler(FileSystemEventHandler):
         def apply() -> bool:
             removed = self._removed(src, event.is_directory)
             added = self._added(dest, event.is_directory)
-            return removed or added or self._notebook._is_registered(dest)
+            return removed or added
 
         self._handle(event, apply)
 
@@ -619,5 +747,4 @@ class FileEventHandler(FileSystemEventHandler):
         if event.is_directory:
             return
         path = os.fsdecode(event.src_path)
-        nb = self._notebook
-        self._handle(event, lambda: nb._register(path) or nb._is_registered(path))
+        self._handle(event, lambda: self._added(path, is_directory=False))
