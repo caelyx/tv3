@@ -1,16 +1,13 @@
 """Tests for tv_notebook.py - note storage and search functionality."""
 
 import os
-import sys
 import threading
 import time
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
-import tv_notebook
+from tv3 import tv_notebook
 
 
 class TestPlainTextNote:

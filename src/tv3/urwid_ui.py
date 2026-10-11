@@ -6,7 +6,7 @@ import subprocess
 
 import urwid
 
-import tv_notebook
+from . import tv_notebook
 
 logger = logging.getLogger("tv3")
 

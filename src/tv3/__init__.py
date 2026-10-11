@@ -9,7 +9,7 @@ Inspired by Notational Velocity (http://notational.net/).
 
 __version__ = "0.1.0"
 __author__ = "Aramís Concepción Durán"
-__license__ = "GNU General Public License, Version 3"
+__license__ = "GPL-3.0-only"
 __url__ = "https://github.com/caelyx/tv3"
 
 __all__ = ["terminal_velocity", "tv_notebook", "urwid_ui"]

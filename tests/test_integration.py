@@ -1,18 +1,12 @@
 """Integration tests for tv3 - testing the complete system."""
 
+import contextlib
 import os
-import sys
 import time
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
-import contextlib
-
-import terminal_velocity
-import tv_notebook
-import urwid_ui
+from tv3 import terminal_velocity, tv_notebook, urwid_ui
 
 
 class TestEndToEndWorkflow:
@@ -77,7 +71,7 @@ class TestEndToEndWorkflow:
         # Should show all again
         assert len(frame.list_box.list_walker) == 4
 
-    @patch("urwid_ui.system")
+    @patch("tv3.urwid_ui.system")
     def test_create_note_through_ui(self, mock_system, temp_notes_dir):
         """Test creating a note through the UI."""
         frame = urwid_ui.MainFrame(temp_notes_dir, "vim", ".txt", [".txt"])
@@ -261,7 +255,7 @@ class TestErrorRecoveryIntegration:
         results = notebook.search("")
         assert len(results) == 1
 
-    @patch("urwid_ui.system", side_effect=Exception("Editor failed"))
+    @patch("tv3.urwid_ui.system", side_effect=Exception("Editor failed"))
     def test_ui_recovers_from_editor_failure(self, mock_system, temp_notes_dir):
         """Test that UI recovers from editor failures."""
         frame = urwid_ui.MainFrame(temp_notes_dir, "vim", ".txt", [".txt"])
@@ -352,7 +346,7 @@ class TestRegressionTests:
         # This tests bug fix #2
         import inspect
 
-        import urwid_ui as ui_module
+        from tv3 import urwid_ui as ui_module
 
         # Check that pipes is not imported
         source = inspect.getsource(ui_module)
@@ -411,7 +405,9 @@ class TestRegressionTests:
     def test_python3_shebang(self):
         """Regression test: ensure Python 3 shebang is used."""
         # This tests bug fix #1
-        terminal_velocity_path = Path(__file__).parent.parent / "src" / "terminal_velocity.py"
+        terminal_velocity_path = (
+            Path(__file__).parent.parent / "src" / "tv3" / "terminal_velocity.py"
+        )
         with open(terminal_velocity_path) as f:
             first_line = f.readline()
 

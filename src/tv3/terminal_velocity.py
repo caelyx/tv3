@@ -8,7 +8,7 @@ import logging.handlers
 import os
 import sys
 
-import urwid_ui
+from . import urwid_ui
 
 # Configuration constants
 DEFAULT_EDITOR = "pico"

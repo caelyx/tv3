@@ -1,16 +1,11 @@
 """Tests for terminal_velocity.py - CLI and configuration."""
 
-import os
-import sys
+import contextlib
 from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
-import contextlib
-
-import terminal_velocity
+from tv3 import terminal_velocity
 
 
 class TestArgumentParsing:

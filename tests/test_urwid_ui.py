@@ -1,18 +1,12 @@
 """Tests for urwid_ui.py - UI components and interactions."""
 
-import os
-import sys
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
 import urwid
 
-import tv_notebook
-import urwid_ui
+from tv3 import tv_notebook, urwid_ui
 
 
 class TestNoteWidget:
@@ -348,7 +342,7 @@ class TestMainFrame:
         # Autocomplete should be consumed
         assert frame.search_box.edit_text.startswith("fir")
 
-    @patch("urwid_ui.system")
+    @patch("tv3.urwid_ui.system")
     def test_keypress_enter_opens_note(self, mock_system, populated_notes_dir):
         """Test that ENTER opens the selected note."""
         frame = urwid_ui.MainFrame(populated_notes_dir, "vim", ".txt", [".txt", ".md"])
@@ -360,7 +354,7 @@ class TestMainFrame:
         frame.keypress((80, 24), "enter")
         mock_system.assert_called_once()
 
-    @patch("urwid_ui.system")
+    @patch("tv3.urwid_ui.system")
     def test_keypress_enter_creates_note(self, mock_system, temp_notes_dir):
         """Test that ENTER creates a new note."""
         frame = urwid_ui.MainFrame(temp_notes_dir, "vim", ".txt", [".txt"])
@@ -503,7 +497,7 @@ class TestEdgeCases:
         # Should not crash
         frame.filter("こんにちは")
 
-    @patch("urwid_ui.system")
+    @patch("tv3.urwid_ui.system")
     def test_editor_with_spaces_in_path(self, mock_system, temp_notes_dir):
         """Test handling editor with spaces in path."""
         # Create the file before initializing the frame so the notebook picks it up
