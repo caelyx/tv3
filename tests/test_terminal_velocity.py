@@ -390,6 +390,22 @@ class TestPrintConfigAndHelp:
             assert re.search(rf"^    {key} = ", epilog, re.MULTILINE), key
         assert "[DEFAULT]" in epilog
 
+    def test_help_lists_the_keys(self, home, monkeypatch, capsys):
+        assert run_main(monkeypatch, "--help") == 0
+        out = capsys.readouterr().out
+        keys = out[out.index("\nkeys:\n") :]
+        for key, action in (
+            ("Enter", "open the selected note"),
+            ("Tab", "complete"),
+            ("Up/Down", "move"),
+            ("Esc", "clear"),
+            ("Ctrl-R", "rename"),
+            ("Ctrl-K", "delete"),
+            ("Ctrl-P", "show or hide the preview"),
+            ("Ctrl-Q, Ctrl-X", "quit"),
+        ):
+            assert re.search(rf"^  {re.escape(key)} +{action}", keys, re.MULTILINE), key
+
     def test_module_entry_point_help(self, home):
         env = {**os.environ, "HOME": str(home)}
         result = subprocess.run(

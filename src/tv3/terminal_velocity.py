@@ -192,6 +192,16 @@ def main():
         "unknown settings are errors. a setting missing from the config\n"
         "file (or no config file) means the default is used. the output\n"
         "of --print-config is a valid config file.\n"
+        "\n"
+        "keys:\n"
+        "  Enter           open the selected note, or create a note titled as typed\n"
+        "  Tab             complete the search text to the selected note's title\n"
+        "  Up/Down         move through the list of notes\n"
+        "  Esc             clear the selection, then the search text, then quit\n"
+        "  Ctrl-R          rename the selected note\n"
+        "  Ctrl-K          delete the selected note, after asking (y/N)\n"
+        "  Ctrl-P          show or hide the preview pane\n"
+        "  Ctrl-Q, Ctrl-X  quit, even from a rename or delete prompt\n"
     )
 
     # Second pass: full argument parsing with config defaults

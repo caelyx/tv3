@@ -310,11 +310,9 @@ class TestRealTerminal:
         stty_editor.write_text(f"#!/bin/sh\nstty -a > {shlex.quote(str(stty_in_editor))}\n")
         stty_editor.chmod(0o755)
         term = terminal(editor=str(stty_editor))
-
-        term.send(b"\x1b[B")
-        term.read(0.3)
         drawn = term.output.count(BOX_CORNER)
-        term.send(b"\r")
+
+        term.send(b"\x1b[B\r")
         assert term.read_until(BOX_CORNER, count=drawn + 1), term.output
         assert stty_in_editor.exists()
         term.send(b"\x11")
@@ -328,21 +326,31 @@ class TestRealTerminal:
     ):
         write_notes(notes_dir, {"a.txt": "alpha body", "b.txt": "bravo body"})
         term = terminal()
-        term.send(b"\x1b[B")
-        term.read(0.3)
 
         term.send(b"\x10")
         assert term.read_until(b"bravo body"), term.output
 
-        term.send(b"\x12")
+        term.send(b"\x1b[B\x12")
         assert term.read_until(b"Rename:"), term.output
         term.send(b"2\r")
         wait_until(lambda: sorted(p.name for p in notes_dir.iterdir()) == ["a.txt", "b2.txt"])
 
         term.send(b"\x0b")
         assert term.read_until(b"Delete 'b2'? (y/N)"), term.output
-        term.send(b"y")
-        wait_until(lambda: sorted(p.name for p in notes_dir.iterdir()) == ["a.txt"])
+        term.send(b"Y")
+        assert term.read_until(b"Deleted 'b2'"), term.output
+        assert sorted(p.name for p in notes_dir.iterdir()) == ["a.txt"]
 
         term.send(b"\x18")
         assert term.wait() == 0
+
+    def test_ctrl_q_quits_from_a_prompt(self, terminal, write_notes, notes_dir):
+        write_notes(notes_dir, {"a.txt": ""})
+        term = terminal()
+
+        term.send(b"\x1b[B\x12")
+        assert term.read_until(b"Rename:"), term.output
+        term.send(b"\x11")
+
+        assert term.wait() == 0
+        assert sorted(p.name for p in notes_dir.iterdir()) == ["a.txt"]

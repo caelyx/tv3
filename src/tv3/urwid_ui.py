@@ -10,6 +10,7 @@ import sys
 import termios
 import threading
 import typing
+import unicodedata
 from typing import NamedTuple
 
 import urwid
@@ -17,11 +18,12 @@ import urwid.display.raw
 from urwid import text_layout
 from urwid.canvas import apply_text_layout
 
-from . import tv_notebook
+from . import ranking, tv_notebook
 
 logger = logging.getLogger("tv3")
 
-# Color palette for the UI
+# Color palette for the UI. Entries with six items give the colours for
+# 256-colour terminals last; 16-colour terminals use the first pair.
 palette = [
     ("autocomplete", "black", "brown"),
     ("match", "default,bold,underline", "default"),
@@ -29,19 +31,41 @@ palette = [
     ("notewidget focused", "black", "brown"),
     ("notewidget unfocused", "default", "default"),
     ("placeholder", "dark blue", "default"),
+    ("prompt", "black", "light gray"),
     ("search", "default", "default"),
-    ("snippet", "dark gray", "default"),
-    ("snippet focused", "black", "brown"),
+    ("snippet", "default,italics", "default", None, "g50,italics", "default"),
+    ("snippet focused", "black,italics", "brown", None, "g19,italics", "brown"),
     ("status", "white", "dark red"),
 ]
 
 EDIT_KEYS = ("backspace", "delete", "home", "end")
 
+QUIT_KEYS = ("ctrl q", "ctrl x")
+
 SNIPPET_INDENT = "  "
 
 PREVIEW_BESIDE_MIN_COLS = 100
 
-_CONTROL_TO_SPACE = dict.fromkeys([*range(0x20), 0x7F], " ")
+LIST_PADDING = 1
+
+
+def completed_length(completion, typed):
+    """How many characters of `completion` `typed` spells out, ignoring case, or None if
+    `typed` does not start `completion`.
+
+    `typed` is compared in Unicode normalisation form NFC, as titles are.
+    Lowercasing can lengthen a character (U+0130 becomes "i" and a combining
+    dot), so the count is of `completion`'s characters, not `typed`'s; a
+    character whose lowercase form `typed` only starts counts.
+    """
+    typed = unicodedata.normalize("NFC", typed).lower()
+    if not completion.lower().startswith(typed):
+        return None
+    length = covered = 0
+    while covered < len(typed):
+        covered += len(completion[length].lower())
+        length += 1
+    return length
 
 
 def placeholder_text(text):
@@ -130,7 +154,7 @@ class AutocompleteWidget(urwid.Edit):
         return (
             bool(typed)
             and completion is not None
-            and completion[: len(typed)].lower() == typed.lower()
+            and completed_length(completion, typed) is not None
         )
 
     def _display(self):
@@ -146,11 +170,13 @@ class AutocompleteWidget(urwid.Edit):
             if typed:
                 return typed, self.edit_pos
             return ("placeholder", self.placeholder), 0
-        if self.completion_extends_text():
+        end = completed_length(completion, typed) if typed else None
+        if end is not None:
+            cursor = completed_length(completion, typed[: self.edit_pos])
             return [
-                ("search", completion[: len(typed)]),
-                ("autocomplete", completion[len(typed) :]),
-            ], self.edit_pos
+                ("search", completion[:end]),
+                ("autocomplete", completion[end:]),
+            ], self.edit_pos if cursor is None else cursor
         return ("autocomplete", completion), len(completion)
 
     def render(self, size, focus=False):
@@ -312,7 +338,11 @@ class NoteFilterListBox(urwid.ListBox):
 
 
 class Preview(urwid.Widget):
-    """The start of a note's contents as plain text, as much as fits."""
+    """The start of a note's contents as plain text, as much as fits.
+
+    Only as much of each line as could fit is laid out, so a note with a
+    huge line draws as fast as any other.
+    """
 
     _sizing = frozenset([urwid.BOX])
     _selectable = False
@@ -327,12 +357,19 @@ class Preview(urwid.Widget):
         self._invalidate()
 
     def render(self, size, focus=False):
-        _, maxrow = size
+        maxcol, maxrow = size
         if self._note is None:
-            return placeholder_text("No note selected").render(size)
-        lines = self._note.contents.split("\n", maxrow)[:maxrow]
-        text = "\n".join(line.expandtabs(4).translate(_CONTROL_TO_SPACE) for line in lines)
-        return urwid.Filler(urwid.Text(text), valign=urwid.TOP).render(size)
+            return placeholder_text("Nothing to preview").render(size)
+        shown = []
+        rows_left = maxrow
+        for line in self._note.contents.split("\n", maxrow)[:maxrow]:
+            if rows_left <= 0:
+                break
+            limit = maxcol * rows_left
+            line = line[:limit].expandtabs(4)[:limit].translate(ranking._CONTROL_TO_SPACE)
+            shown.append(line)
+            rows_left -= max(1, -(-len(line) // maxcol))
+        return urwid.Filler(urwid.Text("\n".join(shown)), valign=urwid.TOP).render(size)
 
 
 class PreviewSplit(urwid.Widget):
@@ -349,6 +386,12 @@ class PreviewSplit(urwid.Widget):
 
     def _layout(self, size):
         return self._beside if size[0] >= PREVIEW_BESIDE_MIN_COLS else self._below
+
+    def main_cols(self, maxcol):
+        """The width of the list at screen width `maxcol`."""
+        if maxcol >= PREVIEW_BESIDE_MIN_COLS:
+            return self._beside.column_widths((maxcol,))[0]
+        return maxcol
 
     def render(self, size, focus=False):
         return self._layout(size).render(size, focus)
@@ -394,9 +437,15 @@ class MainFrame(urwid.Frame):
     the read finishes wakes the loop, and the next redraw runs it. A key or
     mouse event that needs the refilter waits for the read.
 
-    While a prompt is open, keys go to it and mouse events are ignored.
-    Notebook changes still refilter the list; one that removes the
-    prompt's note closes the prompt.
+    While a prompt is open, keys other than the quit keys go to it and
+    mouse events are ignored. Notebook changes still refilter the list; one
+    that removes or replaces the prompt's note closes the prompt.
+
+    Snippets are as wide as the list. When its width changes, the next
+    redraw refilters.
+
+    The preview shows the selected note, or the top row's note when there is
+    no selection.
     """
 
     def __init__(
@@ -426,6 +475,7 @@ class MainFrame(urwid.Frame):
         )
         self.loop = None
         self._pending_filter = None
+        self._snippet_cols = None
         self._prompt = None
         self._wake_fd = None
         self._wake_lock = threading.Lock()
@@ -433,9 +483,9 @@ class MainFrame(urwid.Frame):
         self.list_box = NoteFilterListBox(on_changed=self.select)
         self.preview = Preview()
         self.preview_shown = False
-        self._list_body = urwid.Padding(self.list_box, left=1, right=1)
+        self._list_body = urwid.Padding(self.list_box, left=LIST_PADDING, right=LIST_PADDING)
         self._split_body = PreviewSplit(
-            self._list_body, urwid.Padding(self.preview, left=1, right=1)
+            self._list_body, urwid.Padding(self.preview, left=LIST_PADDING, right=LIST_PADDING)
         )
         self._empty_body = placeholder_text(
             "You have no notes yet, to create a note type a note title then press Enter"
@@ -475,13 +525,42 @@ class MainFrame(urwid.Frame):
 
     def _on_notebook_changed(self, _data):
         prompt = self._prompt
-        if prompt is not None and prompt.note not in self.tv_notebook:
-            self._close_prompt()
-            self.show_message(f"'{prompt.note.title}' no longer exists")
+        if prompt is not None:
+            problem = self._stale(prompt.note)
+            if problem is not None:
+                self._close_prompt()
+                self.show_message(problem)
+        self._refilter_later()
+        return True
+
+    def _refilter_later(self):
+        """Leave a refilter pending, if none is, that keeps the selection."""
         if self._pending_filter is None:
             selected = self.selected_note
             self._pending_filter = PendingFilter(selected, selected is not None)
-        return True
+
+    def _stale(self, note):
+        """Why `note` is no longer the notebook's note for its file, or None if it is."""
+        if note not in self.tv_notebook:
+            return f"'{note.title}' no longer exists"
+        if not any(current is note for current in self.tv_notebook):
+            return f"'{note.title}' changed on disk"
+        return None
+
+    def _snippet_width(self):
+        """The width of snippets: the list's, less the snippet indent."""
+        if self.loop is None:
+            return ranking.SNIPPET_WIDTH
+        cols, _ = self.loop.screen.get_cols_rows()
+        if self.body is self._split_body:
+            cols = self._split_body.main_cols(cols)
+        return max(1, cols - 2 * LIST_PADDING - len(SNIPPET_INDENT))
+
+    def refilter_if_resized(self):
+        """Leave a refilter pending if the search has words, so the list may show
+        snippets, and the list's width changed since the last refilter."""
+        if self.search_box.edit_text.split() and self._snippet_cols != self._snippet_width():
+            self._refilter_later()
 
     def flush_filter(self, wait=True):
         """Run the pending refilter, if any.
@@ -516,7 +595,7 @@ class MainFrame(urwid.Frame):
         self.list_box.fake_focus = note is not None
         selected = self.selected_note
         self.search_box.autocomplete_text = selected.title if selected else None
-        self.preview.set_note(selected)
+        self.preview.set_note(self.list_box.selected_note)
 
     def show_message(self, text):
         """Show `text` in the one-row status line until the next keypress."""
@@ -525,7 +604,16 @@ class MainFrame(urwid.Frame):
     def _open_prompt(self, note, widget, on_key):
         """Show `widget` in the status line and send it every key until it closes."""
         self._prompt = Prompt(note, widget, on_key)
-        self.footer = urwid.AttrMap(widget, "status")
+        self._show_prompt()
+
+    def _show_prompt(self, error=None):
+        """Show the open prompt, with `error` on the row above it if given."""
+        prompt = urwid.AttrMap(self._prompt.widget, "prompt")
+        if error is None:
+            self.footer = prompt
+        else:
+            message = urwid.Text(("status", error), wrap=urwid.ELLIPSIS)
+            self.footer = urwid.Pile([message, prompt], focus_item=1)
         self.focus_position = "footer"
 
     def _close_prompt(self):
@@ -541,6 +629,8 @@ class MainFrame(urwid.Frame):
         Returns:
             Key if not handled, None if handled.
         """
+        if key in QUIT_KEYS:
+            self.quit()
         if self._prompt is not None:
             self._prompt.on_key(size, key)
             return None
@@ -556,8 +646,6 @@ class MainFrame(urwid.Frame):
                 self.set_search_text("")
             else:
                 self.quit()
-        elif key in ["ctrl q", "ctrl x"]:
-            self.quit()
         elif key == "enter":
             self.open_or_create()
         elif key == "ctrl r":
@@ -669,21 +757,31 @@ class MainFrame(urwid.Frame):
         if key == "esc":
             self._close_prompt()
         elif key == "enter":
-            self._close_prompt()
-            self.rename(prompt.note, prompt.widget.edit_text)
+            self._rename(prompt.note, prompt.widget.edit_text)
         else:
-            prompt.widget.keypress((size[0],), key)
+            self._show_prompt()
+            if key == "ctrl u":
+                prompt.widget.set_edit_text("")
+            else:
+                prompt.widget.keypress((size[0],), key)
 
-    def rename(self, note, title):
-        """Rename `note` to `title` and select it, or show why it could not be renamed."""
-        if note not in self.tv_notebook:
-            self.show_message(f"'{note.title}' no longer exists")
+    def _rename(self, note, title):
+        """Rename `note` to `title`, close the prompt and select the note.
+
+        If the notebook refuses, the prompt stays open, showing why, to try
+        another title. If `note` is gone or replaced, the prompt closes.
+        """
+        problem = self._stale(note)
+        if problem is not None:
+            self._close_prompt()
+            self.show_message(problem)
             return
         try:
             renamed = self.tv_notebook.rename(note, title)
         except tv_notebook.Error as e:
-            self.show_message(str(e))
+            self._show_prompt(error=str(e))
             return
+        self._close_prompt()
         self._show_selected(renamed)
 
     def ask_delete(self, note):
@@ -697,13 +795,14 @@ class MainFrame(urwid.Frame):
     def _delete_key(self, _size, key):
         note = self._prompt.note
         self._close_prompt()
-        if key == "y":
+        if key in ("y", "Y"):
             self.delete(note)
 
     def delete(self, note):
-        """Delete `note` and select the note next to it, or show why it could not be deleted."""
-        if note not in self.tv_notebook:
-            self.show_message(f"'{note.title}' no longer exists")
+        """Delete `note`, select the note next to it and say so, or show why it could not be deleted."""
+        problem = self._stale(note)
+        if problem is not None:
+            self.show_message(problem)
             return
         neighbour = self.list_box.neighbour(note)
         try:
@@ -712,6 +811,7 @@ class MainFrame(urwid.Frame):
             self.show_message(str(e))
             return
         self.filter(self.search_box.edit_text, keep=neighbour, autoselect=False)
+        self.show_message(f"Deleted '{note.title}'")
 
     def edit(self, note):
         """Run the editor on `note`, handing it the terminal while it runs."""
@@ -758,31 +858,33 @@ class MainFrame(urwid.Frame):
         """Show the notes matching `query`, best match first, and update the selection.
 
         `keep` stays selected if it still matches. Otherwise, if `autoselect`,
-        the newest note whose title starts with `query` is selected.
+        the top row is selected if `autoselection` picks it.
         """
         self._pending_filter = None
         self._update_body()
-        results = self.tv_notebook.find(query)
+        self._snippet_cols = self._snippet_width()
+        results = self.tv_notebook.find(query, snippet_width=self._snippet_cols)
         self.list_box.filter(results)
         if keep is not None and self.list_box.list_walker.position_of(keep) is not None:
             self.select(keep)
         elif autoselect and query:
-            self.select(self._autoselection(results, query))
+            self.select(autoselection(results, query))
         else:
             self.select(None)
 
-    def _autoselection(self, results, query):
-        """The newest note in `results` that the notebook's exact search finds and whose
-        title starts with `query`, ignoring case; or None.
 
-        Notes found only by fuzzy matching are never autoselected, so fuzzy
-        matching changes neither which note Enter opens nor whether it creates one.
-        """
-        prefix = query.lower()
-        candidates = [r.note for r in results if r.note.title.lower().startswith(prefix)]
-        candidates.sort(key=lambda note: note.mtime, reverse=True)
-        search = self.tv_notebook.search_function
-        return next((note for note in candidates if search([note], query)), None)
+def autoselection(results, query):
+    """The note of the first of `results` if it is an exact match whose title starts
+    with `query`, ignoring case and Unicode normalisation; else None.
+
+    Notes found only by fuzzy matching are never autoselected, so fuzzy
+    matching changes neither which note Enter opens nor whether it creates one.
+    """
+    if not results:
+        return None
+    top = results[0]
+    prefix = unicodedata.normalize("NFC", query).lower()
+    return top.note if top.exact and top.note.title.lower().startswith(prefix) else None
 
 
 def call_with_interrupts_ignored(command):
@@ -801,7 +903,8 @@ def call_with_interrupts_ignored(command):
 
 
 class MainLoop(urwid.MainLoop):
-    """A main loop for a MainFrame that runs the frame's pending refilter before each redraw.
+    """A main loop for a MainFrame that runs the frame's pending refilter before each redraw,
+    after leaving one pending if the list's width changed.
 
     The refilter stays pending if it would wait for the notebook's background read.
     """
@@ -812,6 +915,7 @@ class MainLoop(urwid.MainLoop):
         frame.attach(self)
 
     def draw_screen(self):
+        self.frame.refilter_if_resized()
         self.frame.flush_filter(wait=False)
         super().draw_screen()
 

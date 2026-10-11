@@ -162,9 +162,29 @@ def list_lines(frame):
     return [line.strip() for line in lines[3:end] if line.strip()]
 
 
+def list_titles(frame):
+    """The titles in the list, in order: `list_lines` without the snippet rows."""
+    snippet = {"snippet", "snippet focused"}
+    footer = frame.footer.rows((size(frame)[0],)) if frame.footer is not None else 0
+    found = rows(frame)
+    return [
+        text.strip()
+        for text, attrs in found[3 : len(found) - footer]
+        if text.strip() and not attrs & snippet
+    ]
+
+
 def highlighted(frame):
     """Titles of rows drawn with the focused-note attribute."""
     return [text.strip() for text, attrs in rows(frame) if FOCUSED in attrs]
+
+
+def footer_rows(frame):
+    """The status line's rows as (text, attrs), stripped of padding; [] if there is none."""
+    if frame.footer is None:
+        return []
+    count = frame.footer.rows((size(frame)[0],))
+    return [(text.strip(), attrs) for text, attrs in rows(frame)[-count:]]
 
 
 def status_line(frame):
