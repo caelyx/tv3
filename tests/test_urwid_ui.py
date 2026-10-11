@@ -504,6 +504,7 @@ class TestStatusLine:
         assert frame.footer is None
         assert search_line(frame) == ".hiddenx"
 
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
     def test_filesystem_error_is_reported(self, make_frame, stub_editor, notes_dir):
         frame = make_frame()
         notes_dir.chmod(0o500)
