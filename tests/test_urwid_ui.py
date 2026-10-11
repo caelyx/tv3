@@ -4,7 +4,7 @@ MainFrame is built against a real notebook in a temporary directory, driven
 through `keypress` and checked by rendering it. The editor is a real
 executable (the `stub_editor` fixture). The only stand-in is the terminal:
 `RecordingScreen` replaces urwid's display, recording stop/start and the
-canvases urwid draws, so a real `urwid.MainLoop` can run headless.
+canvases urwid draws, so a real `urwid_ui.MainLoop` can run headless.
 """
 
 import os
@@ -20,6 +20,7 @@ import urwid
 from watchdog.events import FileCreatedEvent, FileDeletedEvent
 from watchdog.observers.api import BaseObserver
 
+from tests.test_tv_notebook import HookedNoteBook
 from tests.ui_helpers import (
     FOCUSED,
     SIZE,
@@ -696,6 +697,38 @@ class TestInputBatches:
         assert list_lines(frame) == ["banana", "apple"]
         assert highlighted(frame) == ["apple"]
 
+    @pytest.mark.parametrize("key", ["down", "page down"])
+    def test_moving_straight_after_typing_moves_in_the_filtered_list(self, make_frame, key):
+        frame = make_frame({"fob.txt": "", "foo.txt": "", "bar.txt": ""})
+
+        drawn = feed(frame, ["f", "o", key])
+
+        assert [line.strip() for line in drawn[3:] if line.strip()] == ["foo", "fob"]
+        assert drawn[1].strip(" │┃") == "fob"
+        assert highlighted(frame) == ["fob"]
+
+    @pytest.mark.parametrize("key", ["esc", "ctrl d", "ctrl u"])
+    def test_escape_straight_after_typing_clears_only_the_completion(self, make_frame, key):
+        frame = make_frame({"fob.txt": "", "foo.txt": "", "bar.txt": ""})
+
+        drawn = feed(frame, ["f", "o", key])
+
+        assert frame.search_box.edit_text == "fo"
+        assert drawn[1].strip(" │┃") == "fo"
+        assert [line.strip() for line in drawn[3:] if line.strip()] == ["foo", "fob"]
+        assert highlighted(frame) == []
+
+    def test_first_screen_shows_a_refilter_left_pending_before_the_loop_ran(self, make_frame):
+        frame = make_frame({"foo.txt": "", "bar.txt": ""})
+        frame.keypress(SIZE, "f")
+        screen = frame.loop.screen
+
+        assert run_headless(frame.loop, lambda: bool(screen.drawn))
+
+        first = screen.drawn[0]
+        assert first[1].strip(" │┃") == "foo"
+        assert [line.strip() for line in first[3:] if line.strip()] == ["foo"]
+
     def test_typing_burst_on_a_navigated_note_appends_to_its_title(self, make_frame):
         frame = make_frame({"zeta.txt": "", "alpha.txt": ""})
         press(frame, "down", "down")
@@ -727,6 +760,80 @@ class TestInputBatches:
         assert drawn[1].strip(" │┃") == "fourteen"
         assert [line.strip() for line in drawn[3:] if line.strip()] == ["fourteen", "foo"]
         assert highlighted(frame) == ["fourteen"]
+
+
+@pytest.fixture
+def held_read(monkeypatch):
+    """Make frames' notebooks hold their background read until the returned gate is set."""
+    gate = threading.Event()
+
+    class HeldNoteBook(HookedNoteBook):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, warmer_gate=gate, **kwargs)
+
+    monkeypatch.setattr(tv_notebook, "PlainTextNoteBook", HeldNoteBook)
+    yield gate
+    gate.set()
+
+
+def _list_rows(drawn):
+    return [line.strip() for line in drawn[3:] if line.strip()]
+
+
+class TestBackgroundRead:
+    """Until the notebook has read every note, typing is drawn without waiting for it."""
+
+    def test_typing_is_drawn_at_once_and_refiltered_when_the_read_finishes(
+        self, make_frame, held_read
+    ):
+        frame = make_frame({"foo.txt": "", "bar.txt": ""}, wait_for_read=False)
+        screen = frame.loop.screen
+
+        drawn = feed(frame, ["f", "o"])
+
+        assert not frame.tv_notebook.loaded
+        assert drawn[1].strip(" │┃") == "fo"
+        assert _list_rows(drawn) == ["bar", "foo"]
+
+        held_read.set()
+
+        assert run_headless(frame.loop, lambda: _list_rows(screen.lines) == ["foo"])
+        assert screen.lines[1].strip(" │┃") == "foo"
+        assert highlighted(frame) == ["foo"]
+
+    def test_search_without_words_is_refiltered_without_waiting(
+        self, make_frame, held_read, monkeypatch
+    ):
+        frame = make_frame({"foo.txt": "", "bar.txt": ""}, wait_for_read=False)
+        queries = _count_searches(monkeypatch, frame)
+
+        drawn = feed(frame, [" "])
+
+        assert not frame.tv_notebook.loaded
+        assert queries == [" "]
+        assert _list_rows(drawn) == ["bar", "foo"]
+
+    def test_enter_waits_for_the_read_and_opens_the_matching_note(
+        self, make_frame, held_read, stub_editor, notes_dir
+    ):
+        frame = make_frame({"alpha.txt": "", "zeta.txt": ""}, wait_for_read=False)
+
+        feed(frame, ["a", "l", "enter"], before=threading.Timer(0.05, held_read.set).start)
+
+        assert stub_editor.calls() == [[str(notes_dir / "alpha.txt")]]
+        assert sorted(p.name for p in notes_dir.iterdir()) == ["alpha.txt", "zeta.txt"]
+        assert highlighted(frame) == ["alpha"]
+
+    def test_enter_waits_for_the_read_and_creates_a_new_note(
+        self, make_frame, held_read, stub_editor, notes_dir
+    ):
+        frame = make_frame({"alpha.txt": "", "zeta.txt": ""}, wait_for_read=False)
+
+        feed(frame, ["a", "x", "enter"], before=threading.Timer(0.05, held_read.set).start)
+
+        assert stub_editor.calls() == [[str(notes_dir / "ax.txt")]]
+        assert sorted(p.name for p in notes_dir.iterdir()) == ["alpha.txt", "ax.txt", "zeta.txt"]
+        assert highlighted(frame) == ["ax"]
 
 
 class TestNotebookChanges:

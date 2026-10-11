@@ -9,6 +9,7 @@ import subprocess
 import sys
 import termios
 import threading
+from typing import NamedTuple
 
 import urwid
 import urwid.display.raw
@@ -219,6 +220,13 @@ class NoteFilterListBox(urwid.ListBox):
         return result
 
 
+class PendingFilter(NamedTuple):
+    """A refilter left to run later: the note to keep selected, and whether to autoselect."""
+
+    keep: tv_notebook.PlainTextNote | None
+    autoselect: bool
+
+
 class MainFrame(urwid.Frame):
     """The topmost urwid widget.
 
@@ -227,10 +235,16 @@ class MainFrame(urwid.Frame):
     shows a message until the next keypress.
 
     Typing does not refilter at once: it clears the selection and leaves a
-    refilter pending, which `flush_filter()` runs. Inside a main loop that
-    happens when the loop has handled all waiting input, before it redraws,
-    so a burst of keys refilters once. Any other key or mouse event runs a
-    pending refilter before it is handled.
+    refilter pending, which `flush_filter()` runs. `MainLoop` runs it before
+    each redraw, once the loop has handled all waiting input, so a burst of
+    keys refilters once. Any other key or mouse event runs a pending
+    refilter before it is handled.
+
+    Until the notebook has read every note, a search with any words would
+    wait for the read, so the redraw leaves such a refilter pending and the
+    typed text is drawn at once. The notebook's change notification when
+    the read finishes wakes the loop, and the next redraw runs it. A key or
+    mouse event that needs the refilter waits for the read.
     """
 
     def __init__(
@@ -259,7 +273,6 @@ class MainFrame(urwid.Frame):
             exclude=exclude,
         )
         self.loop = None
-        self._idle_handle = None
         self._pending_filter = None
         self._wake_fd = None
         self._wake_lock = threading.Lock()
@@ -277,13 +290,8 @@ class MainFrame(urwid.Frame):
         self.filter(self.search_box.edit_text)
 
     def attach(self, loop):
-        """Run inside `loop`: refresh from notebook changes and use its screen.
-
-        Must be called before `loop.run()`, so that pending refilters run
-        before the loop redraws.
-        """
+        """Run inside `loop`: refresh from notebook changes and use its screen."""
         self.loop = loop
-        self._idle_handle = loop.event_loop.enter_idle(self.flush_filter)
         self._wake_fd = loop.watch_pipe(self._on_notebook_changed)
         os.set_blocking(self._wake_fd, False)
         self.tv_notebook.on_change = self._wake
@@ -292,9 +300,6 @@ class MainFrame(urwid.Frame):
         """Stop the file watcher and release the main loop pipe."""
         self.tv_notebook.on_change = None
         self.tv_notebook.close()
-        if self._idle_handle is not None:
-            self.loop.event_loop.remove_enter_idle(self._idle_handle)
-            self._idle_handle = None
         with self._wake_lock:
             if self._wake_fd is not None:
                 self.loop.remove_watch_pipe(self._wake_fd)
@@ -314,14 +319,22 @@ class MainFrame(urwid.Frame):
         self.list_box.prune(set(self.tv_notebook))
         if self._pending_filter is None:
             selected = self.selected_note
-            self._pending_filter = (selected, selected is not None)
+            self._pending_filter = PendingFilter(selected, selected is not None)
         return True
 
-    def flush_filter(self):
-        """Run the pending refilter, if any."""
-        if self._pending_filter is not None:
-            keep, autoselect = self._pending_filter
-            self.filter(self.search_box.edit_text, keep=keep, autoselect=autoselect)
+    def flush_filter(self, wait=True):
+        """Run the pending refilter, if any.
+
+        Unless `wait`, a refilter whose search would wait for the notebook's
+        background read stays pending.
+        """
+        pending = self._pending_filter
+        if pending is None:
+            return
+        query = self.search_box.edit_text
+        if not wait and query.split() and not self.tv_notebook.loaded:
+            return
+        self.filter(query, keep=pending.keep, autoselect=pending.autoselect)
 
     @property
     def selected_note(self):
@@ -357,7 +370,7 @@ class MainFrame(urwid.Frame):
             Key if not handled, None if handled.
         """
         self.footer = None
-        # Only typing with nothing selected can leave the list stale.
+        # Typing onto unselected text only extends the pending refilter.
         if not (self.search_box.valid_char(key) and self.selected_note is None):
             self.flush_filter()
         selected = self.selected_note
@@ -407,7 +420,7 @@ class MainFrame(urwid.Frame):
         result = self.header.keypress((size[0],), key)
         if self.search_box.edit_text != before:
             self.select(None)
-            self._pending_filter = (None, autoselect)
+            self._pending_filter = PendingFilter(None, autoselect)
         return result
 
     def _backspace(self, size):
@@ -523,6 +536,22 @@ def call_with_interrupts_ignored(command):
         signal.signal(signal.SIGINT, previous)
 
 
+class MainLoop(urwid.MainLoop):
+    """A main loop for a MainFrame that runs the frame's pending refilter before each redraw.
+
+    The refilter stays pending if it would wait for the notebook's background read.
+    """
+
+    def __init__(self, frame, *args, **kwargs):
+        super().__init__(frame, *args, **kwargs)
+        self.frame = frame
+        frame.attach(self)
+
+    def draw_screen(self):
+        self.frame.flush_filter(wait=False)
+        super().draw_screen()
+
+
 class Screen(urwid.display.raw.Screen):
     """A terminal screen that receives Ctrl-Q and Ctrl-S as keys.
 
@@ -563,8 +592,6 @@ def launch(notes_dir, editor, extension, extensions, exclude=None):
         exclude=exclude,
     )
     try:
-        loop = urwid.MainLoop(frame, palette, screen=Screen())
-        frame.attach(loop)
-        loop.run()
+        MainLoop(frame, palette, screen=Screen()).run()
     finally:
         frame.close()

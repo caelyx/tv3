@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-import urwid
 
 from tests.ui_helpers import RecordingScreen
 from tv3 import tv_notebook, urwid_ui
@@ -215,13 +214,21 @@ def notes_dir(temp_notes_dir):
 
 @pytest.fixture
 def make_frame(notes_dir, stub_editor, write_notes):
-    """Factory: a MainFrame attached to a headless MainLoop, closed at teardown.
+    """Factory: a MainFrame run by a headless urwid_ui.MainLoop, closed at teardown.
 
-    `notes` ({relpath: content}) are written first, later ones newer.
+    `notes` ({relpath: content}) are written first, later ones newer. Unless
+    `wait_for_read` is false, the notebook has read every note before the
+    frame is returned.
     """
     frames = []
 
-    def make(notes=None, editor=None, extension=".txt", extensions=(".txt", ".md")):
+    def make(
+        notes=None,
+        editor=None,
+        extension=".txt",
+        extensions=(".txt", ".md"),
+        wait_for_read=True,
+    ):
         write_notes(notes_dir, notes or {})
         frame = urwid_ui.MainFrame(
             str(notes_dir),
@@ -230,8 +237,9 @@ def make_frame(notes_dir, stub_editor, write_notes):
             list(extensions),
         )
         frames.append(frame)
-        loop = urwid.MainLoop(frame, urwid_ui.palette, screen=RecordingScreen(), handle_mouse=False)
-        frame.attach(loop)
+        if wait_for_read:
+            _wait_until(lambda: frame.tv_notebook.loaded)
+        urwid_ui.MainLoop(frame, urwid_ui.palette, screen=RecordingScreen(), handle_mouse=False)
         return frame
 
     yield make

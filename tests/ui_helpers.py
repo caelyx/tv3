@@ -1,7 +1,7 @@
 """Helpers for driving and inspecting a MainFrame in tests.
 
 `RecordingScreen` replaces urwid's terminal display, so a real
-`urwid.MainLoop` can run headless.
+`urwid_ui.MainLoop` can run headless.
 """
 
 import time
@@ -99,13 +99,11 @@ class ScriptedScreen(RecordingScreen):
 def press(frame, *keys):
     """Send `keys` one at a time, as the main loop handles keys that arrive apart.
 
-    After each key the loop goes idle, which runs any pending refilter,
-    and redraws.
+    After each key the loop redraws, running any pending refilter first.
     """
     for key in keys:
         frame.keypress(SIZE, key)
-        frame.flush_filter()
-        frame.render(SIZE, focus=True)
+        frame.loop.draw_screen()
 
 
 def type_text(frame, text):

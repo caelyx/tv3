@@ -75,7 +75,7 @@ Shared fixtures:
 - `nested_notes_dir`: Notes directory with `work/`, `personal/` and `archive/` subdirectories
 - `sample_config`: A `~/.tvrc`-style config file pointing at `temp_notes_dir`
 - `stub_editor` / `make_stub_editor`: A real executable standing in for `$EDITOR`; records each run's arguments and can be made to fail
-- `make_frame`: A `MainFrame` on a real notebook in `notes_dir`, attached to a headless `urwid.MainLoop` (see `tests/ui_helpers.py`)
+- `make_frame`: A `MainFrame` on a real notebook in `notes_dir`, run by a headless `urwid_ui.MainLoop` (see `tests/ui_helpers.py`)
 
 ### Test modules
 - `test_tv_notebook.py`: data layer (`tv_notebook.py`)
