@@ -353,6 +353,17 @@ class TestCreate:
         assert os.listdir(os.path.dirname(temp_notes_dir)) == ["notes"]
         assert len(nb) == 0
 
+    @pytest.mark.parametrize("title", ["foo/", "work/project/", "foo/ "])
+    def test_trailing_separator_is_reported_as_such(
+        self, temp_notes_dir, unwatched_notebook, title
+    ):
+        nb = unwatched_notebook(temp_notes_dir)
+
+        with pytest.raises(InvalidNoteTitleError, match="ends with a path separator"):
+            nb.create(title)
+
+        assert os.listdir(temp_notes_dir) == []
+
     def test_symlinked_subdirectory_escaping_notebook_is_rejected(
         self, tmp_path, unwatched_notebook
     ):

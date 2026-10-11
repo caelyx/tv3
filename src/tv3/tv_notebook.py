@@ -404,6 +404,8 @@ class PlainTextNoteBook:
             raise InvalidNoteTitleError("Note title contains a NUL character")
         if os.path.isabs(title):
             raise InvalidNoteTitleError(f"Note title is an absolute path: {title}")
+        if title.endswith(os.sep) or (os.altsep is not None and title.endswith(os.altsep)):
+            raise InvalidNoteTitleError(f"Invalid note title: ends with a path separator: {title}")
         typed_relpath = title if self._has_extension(title) else title + self.extension
         reason = self._rejection(typed_relpath)
         if reason is None and _is_editor_temp(os.path.basename(title)):
