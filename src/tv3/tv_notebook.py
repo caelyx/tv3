@@ -290,6 +290,10 @@ class PlainTextNote:
 class Result:
     """A note found by `PlainTextNoteBook.find`, with what to highlight.
 
+    `exact` is whether the note is an exact match: every query word occurs
+    in its title or contents, with smart case (see `brute_force_search`).
+    Every note is an exact match for a query without words.
+
     Spans are half-open `(start, end)` character ranges, sorted and
     non-overlapping: `title_spans` index `note.title`, `snippet_spans` index
     `snippet`. `snippet` is a line from the note's contents, or None.
@@ -303,6 +307,7 @@ class Result:
     """
 
     note: PlainTextNote
+    exact: bool
     _words: tuple[str, ...] = field(repr=False)
     _snippet_width: int = field(repr=False)
     _fuzzy_spans: tuple[ranking.Span, ...] | None = field(default=None, repr=False)
@@ -465,37 +470,80 @@ class PlainTextNoteBook:
     def find(self, query: str, snippet_width: int = ranking.SNIPPET_WIDTH) -> list[Result]:
         """The notes matching `query`, best first, with what to highlight.
 
-        The notes are those `search` returns plus those whose title fuzzy
-        matches the whole query (see `ranking.fuzzy_needle`). The fuzzy match
-        is against the title's last path component, so a folder name does
-        not fuzzy-match the notes in it, unless the query contains a path
+        The notes are those `search` returns (exact matches) plus those whose
+        title fuzzy matches the whole query (see `ranking.fuzzy_needle`; it
+        needs at least MIN_FUZZY_LENGTH characters). The fuzzy match is against
+        the title's last path component, so a folder name does not
+        fuzzy-match the notes in it, unless the query contains a path
         separator; then it is against the whole title. The query is put in
-        Unicode normalisation form NFC, like titles and contents. An empty query
-        gives every note, newest first. Otherwise fuzzy title matches come
-        first, best score first, then the other notes newest first. Ties go
-        to the newer note.
+        Unicode normalisation form NFC, like titles and contents.
 
-        A fuzzy match's title spans are the fuzzy-matched characters; other
-        notes' title spans are the query words found in the title. Notes
+        A query without words gives every note, newest first. Otherwise, with
+        titles and the query compared ignoring case (`str.casefold`):
+
+        1. exact matches whose title equals the query, newest first;
+        2. other exact matches whose whole title starts with the query,
+           newest first;
+        3. other fuzzy matches, best score first, newer first on ties;
+        4. other exact matches, newest first.
+
+        A title that starts with the query only when case is ignored is not an
+        exact match if the query has a capital letter (smart case) and
+        contents lack it; such a note is in group 3. So the first result is in
+        group 1 or 2 whenever any result is.
+
+        A fuzzy match's title spans are the fuzzy-matched characters, whatever
+        its group; other notes' title spans are the query words found in the
+        title, with smart case. In groups 1 and 2 both cover the matched
+        prefix (spaces aside), except that query words with a capital letter
+        are not found in a title that has them only in another case. Notes
         whose title lacks a query word get a snippet of `snippet_width`
         characters at most (see `ranking.snippet`).
         """
         query = _nfc(query)
         words = tuple(query.split())
         exact = self.search(query)
+        if not words:
+            exact.sort(key=lambda n: n.mtime, reverse=True)
+            return [Result(note, True, words, snippet_width) for note in exact]
         needle = ranking.fuzzy_needle(query)
-        fuzzy = []
+        fuzzy: dict[PlainTextNote, tuple[float, tuple[ranking.Span, ...]]] = {}
         if needle is not None:
             for note in self:
                 match = ranking.fuzzy_match(needle, note.title)
                 if match is not None:
-                    fuzzy.append((match[0], note.mtime, note, match[1]))
-        fuzzy.sort(key=lambda m: (m[0], m[1]), reverse=True)
-        fuzzy_notes = {m[2] for m in fuzzy}
-        rest = [note for note in exact if note not in fuzzy_notes]
-        rest.sort(key=lambda n: n.mtime, reverse=True)
-        return [Result(note, words, snippet_width, spans) for _, _, note, spans in fuzzy] + [
-            Result(note, words, snippet_width) for note in rest
+                    fuzzy[note] = match
+        folded = query.casefold()
+        equal: list[PlainTextNote] = []
+        prefix: list[PlainTextNote] = []
+        rest: list[PlainTextNote] = []
+        for note in exact:
+            title = note.title.casefold()
+            if title == folded:
+                equal.append(note)
+            elif title.startswith(folded):
+                prefix.append(note)
+            elif note not in fuzzy:
+                rest.append(note)
+        prefixed = {*equal, *prefix}
+        fuzzy_rest = [
+            (score, note.mtime, note) for note, (score, _) in fuzzy.items() if note not in prefixed
+        ]
+        fuzzy_rest.sort(key=lambda m: (m[0], m[1]), reverse=True)
+        newest_first = sorted(equal, key=lambda n: n.mtime, reverse=True)
+        newest_first += sorted(prefix, key=lambda n: n.mtime, reverse=True)
+        ordered = newest_first + [note for _, _, note in fuzzy_rest]
+        ordered += sorted(rest, key=lambda n: n.mtime, reverse=True)
+        exact_set = set(exact)
+        return [
+            Result(
+                note,
+                note in exact_set,
+                words,
+                snippet_width,
+                fuzzy[note][1] if note in fuzzy else None,
+            )
+            for note in ordered
         ]
 
     def refresh(self, note: PlainTextNote) -> bool:
@@ -600,7 +648,7 @@ class PlainTextNoteBook:
         with self._notes_lock:
             old_key = self._key(old_relpath)
             if self._notes.get(old_key) is not note:
-                raise NewNoteError(f"{note.title} has changed; refresh and try again")
+                raise NewNoteError(f"'{note.title}' changed on disk; try again")
             if _nfc(relpath) == _nfc(old_relpath):
                 return note
             if self._key(relpath) == old_key:
@@ -637,7 +685,7 @@ class PlainTextNoteBook:
                 logger.debug(f"Note to delete was already gone: {note.abspath}")
                 return
             if current is not note:
-                raise DeleteNoteError(f"{note.title} has changed; refresh and try again")
+                raise DeleteNoteError(f"'{note.title}' changed on disk; try again")
             try:
                 os.remove(note.abspath)
             except FileNotFoundError:

@@ -21,18 +21,21 @@ class TestFuzzyNeedle:
             ("   ", None),
             ("a", None),
             (" A ", None),
-            ("ab", "ab"),
+            ("ab", None),
+            (" Ab ", None),
+            ("abc", "abc"),
             ("  ZeB \t", "zeb"),
             ("a b", "a b"),
             ("Meeting  Notes", "meeting  notes"),
             (DOTTED_I, None),
             (" " + DOTTED_I + " ", None),
-            (DOTTED_I + "s", "i\u0307s"),
+            (DOTTED_I + "s", None),
+            (DOTTED_I + "st", "i\u0307st"),
             ("e\u0301", None),
             ("Cafe\u0301", "caf\u00e9"),
         ],
     )
-    def test_strips_normalises_lowercases_and_needs_two_characters(self, query, expected):
+    def test_strips_normalises_lowercases_and_needs_three_characters(self, query, expected):
         assert fuzzy_needle(query) == expected
 
 
