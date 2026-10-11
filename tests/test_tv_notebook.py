@@ -1185,7 +1185,7 @@ class TestRenameAndDeleteWithRealWatcher:
         assert next(n for n in nb if n.title == new_title) is new
 
     def test_external_renames_back_and_forth_never_drop_the_note(
-        self, temp_notes_dir, notebook, wait_until
+        self, temp_notes_dir, notebook, wait_until, caplog
     ):
         Path(temp_notes_dir, "a.txt").write_text("x")
         nb = notebook(temp_notes_dir)
@@ -1194,15 +1194,17 @@ class TestRenameAndDeleteWithRealWatcher:
         snapshots = []
         nb.on_change = lambda: snapshots.append([t for t in titles(nb) if t != "zz-sentinel"])
 
-        for _ in range(10):
-            os.rename(a, b)
-            os.rename(b, a)
-        self.settle(nb, wait_until)
+        with caplog.at_level(logging.DEBUG, logger="tv3"):
+            for _ in range(10):
+                os.rename(a, b)
+                os.rename(b, a)
+            self.settle(nb, wait_until)
 
         # The file always exists, as a or as b, so the index is never empty;
         # which of them it holds lags behind the renames.
         assert snapshots and all(snapshots), snapshots
         assert titles(nb) == ["a"]
+        assert [r.message for r in caplog.records if r.levelno >= logging.WARNING] == []
 
     def test_delete(self, populated_notes_dir, notebook, wait_until):
         nb = notebook(populated_notes_dir)
