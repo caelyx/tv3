@@ -23,7 +23,7 @@ from pfzy import fzy_scorer
 
 Span = tuple[int, int]
 
-MIN_FUZZY_LENGTH = 2
+MIN_FUZZY_LENGTH = 3
 
 SNIPPET_WIDTH = 80
 

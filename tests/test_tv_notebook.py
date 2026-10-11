@@ -2,11 +2,13 @@
 
 import logging
 import os
+import random
 import shutil
 import threading
 import tracemalloc
 import unicodedata
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 from watchdog.events import (
@@ -22,7 +24,7 @@ from watchdog.events import (
 
 from tests.conftest import BASE_MTIME
 from tv3 import tv_notebook
-from tv3.ranking import SNIPPET_WIDTH, fuzzy_match
+from tv3.ranking import SNIPPET_WIDTH, fuzzy_match, fuzzy_needle
 from tv3.tv_notebook import (
     DeleteNoteError,
     FileEventHandler,
@@ -928,10 +930,10 @@ class TestRename:
         new_a = nb.create("a")
         Path(new_a.abspath).write_text("NEW A")
 
-        with pytest.raises(NewNoteError, match="changed; refresh and try again"):
+        with pytest.raises(NewNoteError, match=r"^'a' changed on disk; try again$"):
             nb.rename(a, "c")
         nb.rename(b, "c")
-        with pytest.raises(NewNoteError, match="changed; refresh and try again"):
+        with pytest.raises(NewNoteError, match=r"^'b' changed on disk; try again$"):
             nb.rename(b, "d")
 
         assert sorted(os.listdir(nb.path)) == ["a.txt", "c.txt"]
@@ -944,7 +946,7 @@ class TestRename:
         nb = unwatched_notebook(temp_notes_dir)
         other = tv_notebook.PlainTextNote("a", nb, ".txt")
 
-        with pytest.raises(NewNoteError, match="changed; refresh and try again"):
+        with pytest.raises(NewNoteError, match=r"^'a' changed on disk; try again$"):
             nb.rename(other, "b")
 
         assert os.listdir(nb.path) == ["a.txt"]
@@ -1054,7 +1056,7 @@ class TestDelete:
         new_a = nb.create("a")
         Path(new_a.abspath).write_text("NEW A")
 
-        with pytest.raises(DeleteNoteError, match="changed; refresh and try again"):
+        with pytest.raises(DeleteNoteError, match=r"^'a' changed on disk; try again$"):
             nb.delete(a)
 
         assert sorted(os.listdir(nb.path)) == ["a.txt", "b.txt"]
@@ -1068,7 +1070,7 @@ class TestDelete:
         nb.delete(a)
         Path(a.abspath).write_text("NEW A")
 
-        with pytest.raises(DeleteNoteError, match="changed; refresh and try again"):
+        with pytest.raises(DeleteNoteError, match=r"^'a' changed on disk; try again$"):
             nb.delete(a)
 
         assert Path(a.abspath).read_text() == "NEW A"
@@ -1593,16 +1595,17 @@ class TestFind:
             pytest.param(" \t ", NEWEST_FIRST, id="blank"),
             pytest.param(
                 "m",
-                ["groceries", "maze", "zebra", "mtg plan", "meeting notes"],
-                id="one-character-exact-only",
+                ["maze", "mtg plan", "meeting notes", "groceries", "zebra"],
+                id="one-character-prefix-then-exact",
             ),
-            pytest.param("mtg", ["mtg plan", "meeting notes"], id="fuzzy-and-fuzzy-only"),
+            pytest.param("mtg", ["mtg plan", "meeting notes"], id="prefix-then-fuzzy"),
             pytest.param("budget", ["meeting notes"], id="exact-only"),
-            pytest.param("maze", ["maze", "zebra"], id="fuzzy-then-exact"),
-            pytest.param("ze", ["zebra", "maze"], id="both-by-score"),
-            pytest.param("abc", ["abc 2", "abc 1"], id="tie-newer-first"),
-            pytest.param("ZE", ["zebra", "maze"], id="uppercase-fuzzy"),
-            pytest.param("MAZE", ["maze"], id="uppercase-exact-is-case-sensitive"),
+            pytest.param("maze", ["maze", "zebra"], id="equal-then-exact"),
+            pytest.param("ze", ["zebra", "maze"], id="two-characters-prefix-then-exact"),
+            pytest.param("abc", ["abc 2", "abc 1"], id="prefix-newer-first"),
+            pytest.param("ZE", [], id="two-characters-no-fuzzy"),
+            pytest.param("ZEB", ["zebra"], id="uppercase-fuzzy"),
+            pytest.param("MAZE", ["maze"], id="uppercase-fuzzy-not-exact"),
             pytest.param("m p", ["mtg plan", "zebra"], id="space-in-fuzzy-query"),
             pytest.param("milk eggs", ["groceries"], id="multi-word-exact"),
             pytest.param("xyzzy", [], id="nothing"),
@@ -1652,8 +1655,8 @@ class TestFind:
                 id="fuzzy-then-exact",
             ),
             pytest.param(
-                "ZE",
-                {"zebra": (((0, 2),), None, ()), "maze": (((2, 4),), None, ())},
+                "ZEB",
+                {"zebra": (((0, 3),), None, ())},
                 id="uppercase-query-gets-real-positions",
             ),
             pytest.param(
@@ -1697,15 +1700,167 @@ class TestFind:
             result.snippet = "x"
 
     def test_result_set_is_exact_matches_plus_fuzzy_title_matches(self, nb):
-        for query in ["m", "mtg", "ze", "ZE", "maze", "m p", "abc", "a", "e", "budget"]:
+        for query in ["m", "mtg", "ze", "ZE", "ZEB", "maze", "m p", "abc", "a", "e", "budget"]:
             exact = {n.title for n in nb.search(query)}
             needle = query.strip().lower()
             fuzzy = (
                 {n.title for n in nb if fuzzy_match(needle, n.title) is not None}
-                if len(needle) >= 2
+                if len(needle) >= 3
                 else set()
             )
-            assert {r.note.title for r in nb.find(query)} == exact | fuzzy, query
+            results = nb.find(query)
+            assert {r.note.title for r in results} == exact | fuzzy, query
+            assert {r.note.title for r in results if r.exact} == exact, query
+
+    @pytest.mark.parametrize(
+        ("query", "expected"),
+        [
+            pytest.param("", dict.fromkeys(NEWEST_FIRST, True), id="empty-all-exact"),
+            pytest.param("mtg", {"mtg plan": True, "meeting notes": False}, id="fuzzy-only"),
+            pytest.param("MAZE", {"maze": False}, id="smart-case"),
+            pytest.param("m p", {"mtg plan": True, "zebra": True}, id="words-anywhere"),
+        ],
+    )
+    def test_exact_flag(self, nb, query, expected):
+        assert {r.note.title: r.exact for r in nb.find(query)} == expected
+
+    PREFIX_NOTES: ClassVar[dict[str, str]] = {
+        "todo.txt": "a",
+        "todo house.txt": "b",
+        "Todo list.txt": "c",
+        "toad dome.txt": "d",
+        "photo docs.txt": "todo",
+        "groceries.txt": "todo milk",
+    }
+
+    def test_equal_title_then_prefix_then_fuzzy_then_exact(
+        self, temp_notes_dir, write_notes, unwatched_notebook
+    ):
+        write_notes(temp_notes_dir, self.PREFIX_NOTES)
+        nb = unwatched_notebook(temp_notes_dir)
+
+        results = nb.find("todo")
+
+        assert [r.note.title for r in results] == [
+            "todo",
+            "Todo list",
+            "todo house",
+            "toad dome",
+            "photo docs",
+            "groceries",
+        ]
+        assert [r.title_spans for r in results[:3]] == [((0, 4),)] * 3
+
+    def test_prefix_is_of_the_whole_title(self, temp_notes_dir, write_notes, unwatched_notebook):
+        os.mkdir(Path(temp_notes_dir, "recipes"))
+        write_notes(temp_notes_dir, {"recipes/pasta bake.txt": "x", "pastures.txt": "y"})
+        nb = unwatched_notebook(temp_notes_dir)
+
+        assert [r.note.title for r in nb.find("pas")] == [
+            "pastures",
+            os.path.join("recipes", "pasta bake"),
+        ]
+        assert [r.note.title for r in nb.find("rec")] == [os.path.join("recipes", "pasta bake")]
+
+    def test_prefix_ignores_case_and_normalisation(
+        self, temp_notes_dir, write_notes, unwatched_notebook
+    ):
+        write_notes(temp_notes_dir, {"Café menu.txt": "x", "café.txt": "y", "a café.txt": "z"})
+        nb = unwatched_notebook(temp_notes_dir)
+
+        results = nb.find(unicodedata.normalize("NFD", "café"))
+
+        assert [r.note.title for r in results] == ["café", "Café menu", "a café"]
+        assert [r.title_spans for r in results] == [((0, 4),), ((0, 4),), ((2, 6),)]
+
+    def test_prefix_match_that_is_not_an_exact_match_ranks_as_fuzzy(
+        self, temp_notes_dir, write_notes, unwatched_notebook
+    ):
+        write_notes(temp_notes_dir, self.PREFIX_NOTES)
+        nb = unwatched_notebook(temp_notes_dir)
+
+        results = nb.find("Todo")
+
+        assert [(r.note.title, r.exact) for r in results][:2] == [
+            ("Todo list", True),
+            ("todo", False),
+        ]
+        assert not any(r.exact for r in results[1:])
+
+    def test_top_row_is_autoselectable_whenever_any_prefix_match_is(
+        self, tmp_path, unwatched_notebook
+    ):
+        """Over random queries on a random notebook: if any result is an exact
+        match whose title starts with the query, ignoring case, the first
+        result is one, so autoselecting the first such result selects the top row.
+        """
+        rng = random.Random(4)
+        vocab = ["todo", "Todo", "to", "do", "house", "plan", "mtg", "meeting", "zebra"]
+        vocab += ["maze", "ze", "a", "ab", "abc", "café", "Straße", "list", "notes"]
+        os.mkdir(tmp_path / "work")
+        titles: dict[str, str] = {}
+        while len(titles) < 80:
+            title = " ".join(rng.choice(vocab) for _ in range(rng.randint(1, 3)))
+            if rng.random() < 0.15:
+                title = os.path.join("work", title)
+            titles.setdefault(title.casefold(), title)
+        for title in titles.values():
+            path = tmp_path / (title + ".txt")
+            path.write_text(" ".join(rng.choice(vocab) for _ in range(rng.randint(0, 6))))
+            mtime = BASE_MTIME + rng.randint(0, 40)
+            os.utime(path, (mtime, mtime))
+        nb = unwatched_notebook(tmp_path)
+
+        queries = []
+        for _ in range(400):
+            kind = rng.random()
+            if kind < 0.5:
+                title = rng.choice(list(titles.values()))
+                query = title[: rng.randint(1, len(title))]
+            elif kind < 0.8:
+                query = " ".join(rng.choice(vocab) for _ in range(rng.randint(1, 2)))
+            else:
+                query = "".join(rng.choice("abdeotz ") for _ in range(rng.randint(1, 4)))
+            if rng.random() < 0.3:
+                query = "".join(c.swapcase() if rng.random() < 0.3 else c for c in query)
+            if rng.random() < 0.1:
+                query = unicodedata.normalize("NFD", query)
+            queries.append(query)
+
+        prefix_matched = spans_checked = 0
+        for query in queries:
+            results = nb.find(query)
+            folded = unicodedata.normalize("NFC", query).casefold()
+            needle = fuzzy_needle(query)
+
+            def is_prefix(r, folded=folded):
+                return r.exact and r.note.title.casefold().startswith(folded)
+
+            def group(r, folded=folded, needle=needle):
+                if is_prefix(r):
+                    return 1 if r.note.title.casefold() == folded else 2
+                fuzzy = needle is not None and fuzzy_match(needle, r.note.title) is not None
+                return 3 if fuzzy else 4
+
+            assert len({r.note for r in results}) == len(results), query
+            assert {r.note for r in results if r.exact} == set(nb.search(query)), query
+            if any(is_prefix(r) for r in results):
+                prefix_matched += 1
+                assert is_prefix(results[0]), query
+            groups = [group(r) for r in results]
+            assert groups == sorted(groups), query
+            if query.islower() and len(folded) == len(query):
+                for r in results:
+                    if group(r) <= 2:
+                        covered = {i for a, b in r.title_spans for i in range(a, b)}
+                        typed = {i for i, c in enumerate(r.note.title[: len(folded)]) if c != " "}
+                        assert typed <= covered, (query, r.note.title, r.title_spans)
+                        spans_checked += 1
+            for g in (1, 2, 4):
+                mtimes = [r.note.mtime for r in results if group(r) == g]
+                assert mtimes == sorted(mtimes, reverse=True), query
+        assert prefix_matched > 100
+        assert spans_checked > 100
 
     def test_snippet_width(self, temp_notes_dir, write_notes, unwatched_notebook):
         write_notes(temp_notes_dir, {"plan.txt": "intro " * 50 + "budget" + " outro" * 50})
@@ -1725,12 +1880,12 @@ class TestFind:
         write_notes(temp_notes_dir, {"work/zebra.txt": "x", "wonky.txt": "y"})
         nb = unwatched_notebook(temp_notes_dir)
 
-        found = [(r.note.title, r.title_spans) for r in nb.find("wo")]
-        nested = [(r.note.title, r.title_spans) for r in nb.find("ze")]
+        found = [(r.note.title, r.title_spans, r.exact) for r in nb.find("wky")]
+        nested = [(r.note.title, r.title_spans) for r in nb.find("zea")]
         full = [(r.note.title, r.title_spans) for r in nb.find("k/z")]
 
-        assert found == [("wonky", ((0, 2),)), (os.path.join("work", "zebra"), ((0, 2),))]
-        assert nested == [(os.path.join("work", "zebra"), ((5, 7),))]
+        assert found == [("wonky", ((0, 1), (3, 5)), False)]
+        assert nested == [(os.path.join("work", "zebra"), ((5, 7), (9, 10)))]
         assert full == [(os.path.join("work", "zebra"), ((3, 6),))]
 
     def test_nfd_title_and_contents_match_nfc_query(self, temp_notes_dir, unwatched_notebook):
