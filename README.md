@@ -15,7 +15,7 @@ and a port from Legacy Python to **Python 3**.
 
 ## Installation
 
-TV3 is installed as a [uv](https://docs.astral.sh/uv/) tool, which gives it
+TV3 needs Python 3.11 or newer and runs on Linux and macOS. It is installed as a [uv](https://docs.astral.sh/uv/) tool, which gives it
 its own isolated environment and installs the `tv3` executable into uv's tool
 bin directory (usually `~/.local/bin`):
 
@@ -30,6 +30,11 @@ git clone https://github.com/caelyx/tv3
 cd tv3
 uv tool install .
 ```
+
+On macOS with Python 3.14 or newer, the `watchdog` dependency has no
+prebuilt wheel and is compiled during install, which needs the Xcode
+Command Line Tools (`xcode-select --install`). Alternatively, install with
+an older Python: `uv tool install --python 3.13 ...`.
 
 If your shell can't find `tv3`, that directory isn't on your `$PATH`. Run
 `uv tool update-shell` and restart your shell.

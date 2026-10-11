@@ -164,7 +164,7 @@ Potential areas for additional testing:
 - Performance tests for large notebooks (1000+ notes)
 - Stress tests for concurrent operations
 - UI accessibility tests
-- Cross-platform compatibility tests (Windows, Linux, macOS)
+- Windows compatibility tests (CI covers Linux and macOS)
 - Fuzzing tests for search functionality
 
 ## Contributing
