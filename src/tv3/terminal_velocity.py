@@ -22,6 +22,7 @@ DEFAULT_CONFIG_FILE = "~/.tvrc"
 # Logging constants
 LOG_MAX_BYTES = 1_000_000  # 1 megabyte
 LOG_BACKUP_COUNT = 1
+LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 
 
 def expand_path(path):
@@ -76,6 +77,7 @@ def setup_logging(log_file, debug):
         print(f"Warning: Could not create log file {log_file}: {e}", file=sys.stderr)
         root.addHandler(logging.NullHandler())
         return
+    handler.setFormatter(logging.Formatter(LOG_FORMAT))
     root.addHandler(handler)
 
 
@@ -198,7 +200,7 @@ def main():
     args.config = config_file
     args.notes_dir = expand_path(args.notes_dir)
     args.log_file = expand_path(args.log_file)
-    args.extensions = [ext.strip() for ext in args.extensions.split(",")]
+    args.extensions = [ext.strip() for ext in args.extensions.split(",") if ext.strip()]
     args.exclude = [name.strip() for name in args.exclude.split(",")]
 
     if args.print_config:

@@ -7,6 +7,7 @@ assertions are made on the arguments it received.
 
 import logging
 import os
+import re
 import subprocess
 import sys
 
@@ -153,6 +154,13 @@ class TestConfigValues:
         assert launched[0]["exclude"] == ["old"]
         assert launched[0]["notes_dir"] == str(notes)
 
+    def test_empty_extension_entries_are_dropped(self, home, launched, monkeypatch):
+        write_config(home / ".tvrc", "extensions = .md, .txt,\n")
+        run_main(monkeypatch)
+        assert launched[0]["extensions"] == [".md", ".txt"]
+        run_main(monkeypatch, "--extensions", ",.rst,,")
+        assert launched[1]["extensions"] == [".rst"]
+
     def test_percent_sign_in_value_is_literal(self, home, launched, monkeypatch):
         write_config(home / ".tvrc", "editor = vim -c 'set tw=80%'\nextension = .md\n")
         run_main(monkeypatch)
@@ -264,6 +272,19 @@ class TestLogging:
         log = (home / ".tvlog").read_text()
         assert "tv3 critical message" in log
         assert "library warning message" in log
+
+    def test_log_records_have_time_level_and_logger_name(self, home, monkeypatch):
+        def logging_launch(**kwargs):
+            logging.getLogger("watchdog.observers").warning("library warning message")
+
+        monkeypatch.setattr(urwid_ui, "launch", logging_launch)
+        run_main(monkeypatch)
+        line = (home / ".tvlog").read_text().splitlines()[-1]
+        assert re.fullmatch(
+            r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3} WARNING watchdog\.observers: "
+            r"library warning message",
+            line,
+        )
 
     def test_fatal_error_is_reported_on_stderr_after_ui_exits(self, home, monkeypatch, capsys):
         def failing_launch(**kwargs):
