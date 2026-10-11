@@ -2,8 +2,22 @@
 
 import os
 import time
+from collections.abc import Callable
 
 import pytest
+
+from tv3 import tv_notebook
+
+BASE_MTIME = 1_700_000_000
+
+
+def _write_notes(notes_dir, notes):
+    """Write `notes` ({relpath: content}) with strictly increasing mtimes."""
+    for i, (relpath, content) in enumerate(notes.items()):
+        filepath = os.path.join(notes_dir, relpath)
+        with open(filepath, "w") as f:
+            f.write(content)
+        os.utime(filepath, (BASE_MTIME + i, BASE_MTIME + i))
 
 
 @pytest.fixture
@@ -24,14 +38,7 @@ def populated_notes_dir(temp_notes_dir):
         "meeting_notes.txt": "Meeting on 2025-01-15\nDiscussed project timeline.",
         "todo.md": "- Buy groceries\n- Call mom\n- Fix bug",
     }
-
-    for filename, content in notes.items():
-        filepath = os.path.join(temp_notes_dir, filename)
-        with open(filepath, "w") as f:
-            f.write(content)
-        # Sleep briefly to ensure different mtimes
-        time.sleep(0.01)
-
+    _write_notes(temp_notes_dir, notes)
     return temp_notes_dir
 
 
@@ -50,13 +57,7 @@ def nested_notes_dir(temp_notes_dir):
         "personal/journal.txt": "Personal journal entry",
         "archive/old_note.txt": "Archived note",
     }
-
-    for filepath, content in notes.items():
-        full_path = os.path.join(temp_notes_dir, filepath)
-        with open(full_path, "w") as f:
-            f.write(content)
-        time.sleep(0.01)
-
+    _write_notes(temp_notes_dir, notes)
     return temp_notes_dir
 
 
@@ -94,3 +95,54 @@ echo "Mock editor called with: $1" >> {}
     monkeypatch.setenv("EDITOR", str(editor_script))
 
     return str(editor_script)
+
+
+@pytest.fixture
+def notebook():
+    """Factory for PlainTextNoteBooks that are always closed at teardown.
+
+    Defaults: extension ".txt", extensions [".txt", ".md"].
+    """
+    notebooks = []
+
+    def make(path, extension=".txt", extensions=(".txt", ".md"), **kwargs):
+        nb = tv_notebook.PlainTextNoteBook(str(path), extension, list(extensions), **kwargs)
+        notebooks.append(nb)
+        return nb
+
+    yield make
+    for nb in notebooks:
+        nb.close()
+
+
+@pytest.fixture
+def unwatched_notebook(notebook):
+    """Factory for notebooks whose filesystem observer is already stopped.
+
+    Tests drive `FileEventHandler` directly with watchdog event objects, so
+    the outcome does not depend on the timing of real filesystem events.
+    """
+
+    def make(path, **kwargs):
+        nb = notebook(path, **kwargs)
+        nb.close()
+        return nb
+
+    return make
+
+
+def _wait_until(predicate: Callable[[], bool], timeout: float = 5, interval: float = 0.01):
+    """Poll `predicate` until it returns truthy; fail the test after `timeout` seconds."""
+    deadline = time.monotonic() + timeout
+    while True:
+        if predicate():
+            return
+        if time.monotonic() >= deadline:
+            pytest.fail(f"condition not met within {timeout}s")
+        time.sleep(interval)
+
+
+@pytest.fixture
+def wait_until():
+    """The polling helper `wait_until(predicate, timeout=5)`."""
+    return _wait_until
