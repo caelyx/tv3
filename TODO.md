@@ -100,7 +100,7 @@ except Exception as e:
 **Action Items:**
 - [x] Pin `watchdog` version in pyproject.toml (`watchdog>=2.0.0,<5.0.0`)
 - [x] Declare dependencies only in pyproject.toml
-- [ ] Document why urwid is pinned to 2.1.2
+- [x] ~~Document why urwid is pinned to 2.1.2~~ (pin removed: urwid 2.1.2 cannot start on Python 3.14; now `urwid>=4.2.5,<5`)
 - [ ] Test with specified versions
 - [x] Lock dependencies with uv (`uv.lock`)
 
@@ -205,7 +205,7 @@ except Exception as e:
 
 #### a) Fix README.md vs pyproject.toml contradiction
 - [x] ~~Update README.md line 34 (says urwid 1.1.1, should be 2.1.2)~~ (no longer applies: README no longer mentions urwid versions)
-- [ ] Document why urwid is pinned to 2.1.2
+- [x] ~~Document why urwid is pinned to 2.1.2~~ (pin removed: urwid 2.1.2 cannot start on Python 3.14; now `urwid>=4.2.5,<5`)
 
 #### b) Fix CLAUDE.md incorrect default
 - [x] Update CLAUDE.md line 40 about default editor

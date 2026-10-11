@@ -95,7 +95,7 @@ log_file = ~/.tvlog
 
 ## Dependencies
 
-- **urwid 2.1.2**: Terminal UI framework (version pinned due to compatibility)
+- **urwid 4.x**: Terminal UI framework
 - **watchdog**: Filesystem monitoring for automatic note syncing
 
 ## UI Keyboard Shortcuts
