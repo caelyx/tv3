@@ -6,6 +6,7 @@ import configparser
 import logging
 import logging.handlers
 import os
+import re
 import sys
 
 from . import urwid_ui
@@ -24,38 +25,100 @@ LOG_MAX_BYTES = 1_000_000  # 1 megabyte
 LOG_BACKUP_COUNT = 1
 LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 
+# The settings a config file may contain, in the order -p prints them.
+CONFIG_KEYS = ("editor", "extension", "extensions", "exclude", "notes_dir", "log_file", "debug")
+
+# Matches the variable references os.path.expandvars expands when defined.
+UNEXPANDED_VARIABLE = re.compile(r"\$(\w+|\{[^}]*\})", re.ASCII)
+
+
+class ConfigError(Exception):
+    """An unusable configuration value or config file."""
+
+
+def fail(message):
+    """Report a configuration error on stderr and exit with status 2."""
+    print(f"tv3: error: {message}", file=sys.stderr)
+    sys.exit(2)
+
 
 def expand_path(path):
-    """Return an absolute path with ``~`` and environment variables expanded."""
-    return os.path.abspath(os.path.expandvars(os.path.expanduser(path)))
+    """Return an absolute path with ``~`` and environment variables expanded.
+
+    Raises ConfigError if the path refers to an undefined environment variable.
+    """
+    expanded = os.path.expandvars(os.path.expanduser(path))
+    undefined = UNEXPANDED_VARIABLE.search(expanded)
+    if undefined:
+        raise ConfigError(f"undefined environment variable {undefined.group(0)} in {path}")
+    return os.path.abspath(expanded)
 
 
-def read_config(parser, config_file, explicit):
+def split_list(value):
+    """Split a comma-separated setting into its non-empty, stripped entries."""
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def dotted(extension):
+    """Return `extension` with a leading dot."""
+    return extension if not extension or extension.startswith(".") else "." + extension
+
+
+def read_config(config_file, explicit):
     """Read the [DEFAULT] section of the config file into a dict of typed values.
 
     A missing config file is an error only if it was given explicitly.
-    Errors are reported through ``parser.error``, which exits.
+    Raises ConfigError for any other problem with the file.
     """
     config = configparser.ConfigParser(interpolation=None)
-    if not os.path.exists(config_file):
-        if explicit:
-            parser.error(f"config file not found: {config_file}")
-        return {}
     try:
-        config.read(config_file)
+        with open(config_file, encoding="utf-8") as f:
+            config.read_file(f)
+    except FileNotFoundError:
+        if explicit:
+            raise ConfigError(f"config file not found: {config_file}") from None
+        return {}
+    except OSError as e:
+        raise ConfigError(f"could not read config file {config_file}: {e.strerror}") from None
+    except UnicodeDecodeError as e:
+        raise ConfigError(f"config file {config_file} is not valid UTF-8: {e}") from None
     except configparser.Error as e:
-        parser.error(f"could not parse config file {config_file}: {e}")
+        raise ConfigError(f"could not parse config file {config_file}: {e}") from None
 
+    if config.sections():
+        raise ConfigError(
+            f"unknown section [{config.sections()[0]}] in {config_file} "
+            f"(settings belong in [{configparser.DEFAULTSECT}])"
+        )
     defaults = dict(config.defaults())
+    for key in defaults:
+        if key not in CONFIG_KEYS:
+            raise ConfigError(f"unknown setting {key!r} in {config_file}")
     if "debug" in defaults:
         try:
             defaults["debug"] = config.getboolean(configparser.DEFAULTSECT, "debug")
         except ValueError:
-            parser.error(
+            raise ConfigError(
                 f"invalid value for 'debug' in {config_file}: {defaults['debug']!r} "
                 "(expected true/false, yes/no, on/off or 1/0)"
-            )
+            ) from None
     return defaults
+
+
+def format_config(args):
+    """Return the effective settings as the contents of a config file."""
+    values = {
+        "editor": args.editor,
+        "extension": args.extension,
+        "extensions": ", ".join(args.extensions),
+        "exclude": ", ".join(args.exclude),
+        "notes_dir": args.notes_dir,
+        "log_file": args.log_file,
+        "debug": args.debug,
+    }
+    lines = [f"[{configparser.DEFAULTSECT}]"]
+    lines += [f"{key} = {values[key]}" for key in CONFIG_KEYS]
+    return "\n".join(lines)
 
 
 def setup_logging(log_file, debug):
@@ -64,6 +127,9 @@ def setup_logging(log_file, debug):
     The handler is attached to the root logger so that records from
     libraries are captured too; without a handler anywhere in the hierarchy
     logging would fall back to writing on stderr, over the terminal UI.
+
+    Returns True if the log file was opened. Otherwise a warning is printed
+    on stderr and records are discarded.
     """
     root = logging.getLogger()
     logging.getLogger("tv3").setLevel(logging.DEBUG if debug else logging.WARNING)
@@ -74,11 +140,16 @@ def setup_logging(log_file, debug):
             backupCount=LOG_BACKUP_COUNT,
         )
     except OSError as e:
-        print(f"Warning: Could not create log file {log_file}: {e}", file=sys.stderr)
+        print(
+            f"tv3: warning: could not open log file {log_file}: {e.strerror}",
+            file=sys.stderr,
+            flush=True,
+        )
         root.addHandler(logging.NullHandler())
-        return
+        return False
     handler.setFormatter(logging.Formatter(LOG_FORMAT))
     root.addHandler(handler)
+    return True
 
 
 def main():
@@ -95,8 +166,11 @@ def main():
     )
     (args, _) = parser.parse_known_args()
     explicit_config = args.config is not None
-    config_file = expand_path(args.config if explicit_config else DEFAULT_CONFIG_FILE)
-    defaults = read_config(parser, config_file, explicit_config)
+    try:
+        config_file = expand_path(args.config if explicit_config else DEFAULT_CONFIG_FILE)
+        defaults = read_config(config_file, explicit_config)
+    except ConfigError as e:
+        fail(e)
 
     description = __doc__
     epilog = (
@@ -109,10 +183,15 @@ def main():
         f"    extension = {DEFAULT_EXTENSION}\n"
         "    # The filename extensions to recognize in the notes dir.\n"
         f"    extensions = {DEFAULT_EXTENSIONS}\n"
+        f"    exclude = {DEFAULT_EXCLUDE_DIRS}\n"
         f"    notes_dir = {DEFAULT_NOTES_DIR}\n"
+        f"    log_file = {DEFAULT_LOG_FILE}\n"
+        "    debug = false\n"
         "\n"
-        "if there is no config file (or an argument is missing from the\n"
-        "config file) the default will be used\n"
+        "settings must be in the [DEFAULT] section; other sections and\n"
+        "unknown settings are errors. a setting missing from the config\n"
+        "file (or no config file) means the default is used. the output\n"
+        "of --print-config is a valid config file.\n"
     )
 
     # Second pass: full argument parsing with config defaults
@@ -166,10 +245,10 @@ def main():
     parser.add_argument(
         "-d",
         "--debug",
-        action="store_true",
-        default=defaults.get("debug", False),
+        action=argparse.BooleanOptionalAction,
+        default=None,
         dest="debug",
-        help="debug logging on or off (default: off)",
+        help="log debug messages to the log file, or not (default: the config file, else off)",
     )
     parser.add_argument(
         "-l",
@@ -185,7 +264,7 @@ def main():
         action="store_true",
         default=False,
         dest="print_config",
-        help="print your configuration settings then exit",
+        help="print the effective configuration, in config file format, then exit",
     )
     parser.add_argument(
         "notes_dir",
@@ -197,17 +276,22 @@ def main():
 
     args = parser.parse_args()
 
-    args.config = config_file
-    args.notes_dir = expand_path(args.notes_dir)
-    args.log_file = expand_path(args.log_file)
-    args.extensions = [ext.strip() for ext in args.extensions.split(",") if ext.strip()]
-    args.exclude = [name.strip() for name in args.exclude.split(",")]
+    if args.debug is None:
+        args.debug = defaults.get("debug", False)
+    for key in ("notes_dir", "log_file"):
+        try:
+            setattr(args, key, expand_path(getattr(args, key)))
+        except ConfigError as e:
+            fail(f"{key}: {e}")
+    args.extension = dotted(args.extension.strip())
+    args.extensions = [dotted(ext) for ext in split_list(args.extensions)]
+    args.exclude = split_list(args.exclude)
 
     if args.print_config:
-        print(args)
+        print(format_config(args))
         sys.exit(0)
 
-    setup_logging(args.log_file, args.debug)
+    logging_to_file = setup_logging(args.log_file, args.debug)
     logger = logging.getLogger("tv3")
     logger.debug(f"Starting Terminal Velocity with args: {args}")
 
@@ -225,7 +309,8 @@ def main():
     except Exception as e:
         logger.exception(f"Fatal error: {e}")
         print(f"\nFatal error: {e}", file=sys.stderr)
-        print("See log file for details:", args.log_file, file=sys.stderr)
+        if logging_to_file:
+            print("See log file for details:", args.log_file, file=sys.stderr)
         sys.exit(1)
 
 

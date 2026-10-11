@@ -320,14 +320,54 @@ class TestLogging:
 
 
 class TestPrintConfigAndHelp:
-    def test_print_config_shows_resolved_settings(self, home, launched, monkeypatch, capsys):
-        write_config(home / ".tvrc", "editor = vim\nnotes_dir = ~/N\n")
+    def test_print_config_shows_effective_settings_in_config_format(
+        self, home, launched, monkeypatch, capsys
+    ):
+        write_config(
+            home / ".tvrc",
+            "editor = vim\nnotes_dir = ~/N\nextension = md\nextensions = md, .org,\n",
+        )
+        assert run_main(monkeypatch, "-p", "--exclude", "a, ,b") == 0
+        assert capsys.readouterr().out.splitlines() == [
+            "[DEFAULT]",
+            "editor = vim",
+            "extension = .md",
+            "extensions = .md, .org",
+            "exclude = a, b",
+            f"notes_dir = {home / 'N'}",
+            f"log_file = {home / '.tvlog'}",
+            "debug = False",
+        ]
+
+    def test_print_config_output_is_a_valid_config_file(
+        self, home, launched, monkeypatch, capsys, tmp_path
+    ):
+        write_config(
+            home / ".tvrc",
+            "editor = vim -c 'set tw=80%'\n"
+            "extensions = txt,md\n"
+            "exclude =\n"
+            "notes_dir = $HOME/notes\n"
+            "debug = yes\n",
+        )
         assert run_main(monkeypatch, "-p") == 0
-        out = capsys.readouterr().out
-        assert "editor='vim'" in out
-        assert "extension='.txt'" in out
-        assert f"notes_dir='{home / 'N'}'" in out
-        assert "debug=False" in out
+        printed = capsys.readouterr().out
+        config = tmp_path / "printed.tvrc"
+        config.write_text(printed)
+
+        assert run_main(monkeypatch, "-c", str(config), "-p") == 0
+        assert capsys.readouterr().out == printed
+        assert run_main(monkeypatch, "-c", str(config)) == 0
+        assert launched == [
+            {
+                "notes_dir": str(home / "notes"),
+                "editor": "vim -c 'set tw=80%'",
+                "extension": ".txt",
+                "extensions": [".txt", ".md"],
+                "exclude": [],
+            }
+        ]
+        assert "Starting Terminal Velocity" in (home / ".tvlog").read_text()
 
     def test_help_text(self, home, monkeypatch, capsys):
         assert run_main(monkeypatch, "--help") == 0
@@ -336,6 +376,19 @@ class TestPrintConfigAndHelp:
         assert "(default: .txt)" in out
         assert "missing from the)" not in out
         assert "command line > config file > $EDITOR > pico" in " ".join(out.split())
+        assert "--no-debug" in out
+        epilog = out[out.index("example config file") :]
+        for key in (
+            "editor",
+            "extension",
+            "extensions",
+            "exclude",
+            "notes_dir",
+            "log_file",
+            "debug",
+        ):
+            assert re.search(rf"^    {key} = ", epilog, re.MULTILINE), key
+        assert "[DEFAULT]" in epilog
 
     def test_module_entry_point_help(self, home):
         env = {**os.environ, "HOME": str(home)}
@@ -348,3 +401,174 @@ class TestPrintConfigAndHelp:
         )
         assert result.stdout.startswith("usage: tv3 ")
         assert not (home / ".tvlog").exists()
+
+
+def run_tv3(home, *args):
+    """Run tv3 in a subprocess with $HOME set to `home`."""
+    env = {**os.environ, "HOME": str(home)}
+    env.pop("EDITOR", None)
+    return subprocess.run(
+        [sys.executable, "-m", "tv3", *args],
+        capture_output=True,
+        text=True,
+        env=env,
+        stdin=subprocess.DEVNULL,
+    )
+
+
+class TestConfigErrors:
+    """Config errors exit with status 2 and a one-line message naming the problem."""
+
+    def assert_config_error(self, monkeypatch, capsys, launched, *needles, args=()):
+        assert run_main(monkeypatch, *args) == 2
+        err = capsys.readouterr().err
+        assert err.startswith("tv3: error: ")
+        assert len(err.splitlines()) == 1
+        assert "usage:" not in err
+        for needle in needles:
+            assert needle in err
+        assert launched == []
+
+    def test_config_directory_is_an_error(self, home, launched, monkeypatch, capsys, tmp_path):
+        config = tmp_path / "a-directory"
+        config.mkdir()
+        self.assert_config_error(
+            monkeypatch, capsys, launched, str(config), args=["-c", str(config)]
+        )
+
+    def test_default_config_directory_is_an_error(self, home, launched, monkeypatch, capsys):
+        (home / ".tvrc").mkdir()
+        self.assert_config_error(monkeypatch, capsys, launched, str(home / ".tvrc"))
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root can read unreadable files")
+    def test_unreadable_config_is_an_error(self, home, launched, monkeypatch, capsys):
+        config = write_config(home / ".tvrc", "editor = vim\n")
+        config.chmod(0)
+        try:
+            self.assert_config_error(monkeypatch, capsys, launched, str(config))
+        finally:
+            config.chmod(0o600)
+
+    def test_non_utf8_config_is_an_error(self, home, launched, monkeypatch, capsys):
+        config = home / ".tvrc"
+        config.write_bytes("[DEFAULT]\neditor = caf\u00e9\n".encode("latin-1"))
+        self.assert_config_error(monkeypatch, capsys, launched, str(config), "UTF-8")
+
+    def test_utf8_config_is_read(self, home, launched, monkeypatch):
+        (home / ".tvrc").write_text("[DEFAULT]\nnotes_dir = ~/Caf\u00e9\n", encoding="utf-8")
+        run_main(monkeypatch)
+        assert launched[0]["notes_dir"] == str(home / "Caf\u00e9")
+
+    def test_unknown_section_is_an_error(self, home, launched, monkeypatch, capsys):
+        config = home / ".tvrc"
+        config.write_text("[tv3]\neditor = vim\n")
+        self.assert_config_error(monkeypatch, capsys, launched, str(config), "[tv3]")
+
+    def test_unknown_key_is_an_error(self, home, launched, monkeypatch, capsys):
+        config = write_config(home / ".tvrc", "editor = vim\neditr = nano\n")
+        self.assert_config_error(monkeypatch, capsys, launched, str(config), "'editr'")
+
+    def test_print_config_is_not_a_config_key(self, home, launched, monkeypatch, capsys):
+        config = write_config(home / ".tvrc", "print_config = true\n")
+        self.assert_config_error(monkeypatch, capsys, launched, str(config), "'print_config'")
+
+    def test_parse_error_has_no_usage_line(self, home, launched, monkeypatch, capsys):
+        config = home / ".tvrc"
+        config.write_text("editor = vim\n")
+        assert run_main(monkeypatch) == 2
+        err = capsys.readouterr().err
+        assert err.startswith(f"tv3: error: could not parse config file {config}")
+        assert "usage:" not in err
+
+    @pytest.mark.parametrize(
+        ("body", "args", "key"),
+        [
+            ("notes_dir = $TV3_UNDEFINED/notes\n", [], "notes_dir"),
+            ("log_file = ${TV3_UNDEFINED}/tv.log\n", [], "log_file"),
+            ("", ["$TV3_UNDEFINED/notes"], "notes_dir"),
+            ("", ["-l", "$TV3_UNDEFINED/tv.log"], "log_file"),
+        ],
+    )
+    def test_undefined_environment_variable_in_path_is_an_error(
+        self, home, launched, monkeypatch, capsys, body, args, key
+    ):
+        monkeypatch.delenv("TV3_UNDEFINED", raising=False)
+        monkeypatch.chdir(home)
+        write_config(home / ".tvrc", body)
+        self.assert_config_error(
+            monkeypatch, capsys, launched, f"{key}: ", "TV3_UNDEFINED", args=args
+        )
+        assert sorted(p.name for p in home.iterdir()) == [".tvrc"]
+
+    def test_config_error_exit_status_in_subprocess(self, home):
+        (home / ".tvrc").write_text("[tv3]\neditor = vim\n")
+        result = run_tv3(home, "-p")
+        assert result.returncode == 2
+        assert result.stdout == ""
+        assert result.stderr.startswith("tv3: error: ")
+        assert "usage:" not in result.stderr
+
+
+class TestListValues:
+    def test_empty_exclude_entries_are_dropped(self, home, launched, monkeypatch):
+        write_config(home / ".tvrc", "exclude = , old,, tmp ,\n")
+        run_main(monkeypatch)
+        assert launched[0]["exclude"] == ["old", "tmp"]
+
+    def test_extensions_are_given_a_leading_dot(self, home, launched, monkeypatch):
+        write_config(home / ".tvrc", "extension = md\nextensions = md, .txt, org\n")
+        run_main(monkeypatch)
+        assert launched[0]["extension"] == ".md"
+        assert launched[0]["extensions"] == [".md", ".txt", ".org"]
+
+
+class TestDebugFlag:
+    def test_no_debug_overrides_config(self, home, launched, monkeypatch):
+        write_config(home / ".tvrc", "debug = true\n")
+        run_main(monkeypatch, "--no-debug")
+        assert launched
+        assert "Starting Terminal Velocity" not in (home / ".tvlog").read_text()
+
+    def test_short_debug_flag_overrides_config(self, home, launched, monkeypatch):
+        write_config(home / ".tvrc", "debug = no\n")
+        run_main(monkeypatch, "-d")
+        assert "Starting Terminal Velocity" in (home / ".tvlog").read_text()
+
+
+class TestUnusableLogFile:
+    def test_fatal_error_does_not_point_at_missing_log_file(self, home, monkeypatch, capsys):
+        log_file = home / "no-such-dir" / "tv.log"
+
+        def failing_launch(**kwargs):
+            raise RuntimeError("notes dir exploded")
+
+        monkeypatch.setattr(urwid_ui, "launch", failing_launch)
+        assert run_main(monkeypatch, "-l", str(log_file)) == 1
+        err = capsys.readouterr().err
+        assert f"could not open log file {log_file}" in err
+        assert "notes dir exploded" in err
+        assert "See log file" not in err
+        assert not log_file.exists()
+
+    def test_warning_is_printed_before_the_ui_starts(self, home, monkeypatch, capsys):
+        log_file = home / "no-such-dir" / "tv.log"
+        seen_at_launch = []
+
+        def recording_launch(**kwargs):
+            seen_at_launch.append(capsys.readouterr().err)
+
+        monkeypatch.setattr(urwid_ui, "launch", recording_launch)
+        assert run_main(monkeypatch, "-l", str(log_file)) == 0
+        assert f"could not open log file {log_file}" in seen_at_launch[0]
+        assert capsys.readouterr().err == ""
+
+    def test_unusable_log_file_in_subprocess(self, home, tmp_path):
+        not_a_dir = tmp_path / "a-file"
+        not_a_dir.write_text("")
+        log_file = home / "no-such-dir" / "tv.log"
+        result = run_tv3(home, "-l", str(log_file), str(not_a_dir))
+        assert result.returncode == 1
+        lines = result.stderr.strip().splitlines()
+        assert lines[0].startswith(f"tv3: warning: could not open log file {log_file}")
+        assert any(line.startswith("Fatal error:") for line in lines[1:])
+        assert "See log file" not in result.stderr

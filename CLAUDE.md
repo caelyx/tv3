@@ -89,9 +89,9 @@ log_file = ~/.tvlog
 - `-x, --extension`: Extension for new notes (default: `.txt`)
 - `--extensions`: Comma-separated list of extensions to recognize
 - `--exclude`: Comma-separated list of directories/files to skip
-- `-d, --debug`: Enable debug logging
+- `-d, --debug` / `--no-debug`: Enable or disable debug logging (overrides the config file)
 - `-l, --log-file`: Log file path (default: `~/.tvlog`)
-- `-p, --print-config`: Print configuration and exit
+- `-p, --print-config`: Print the effective configuration in config-file format and exit
 
 ## Dependencies
 
