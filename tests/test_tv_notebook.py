@@ -2483,14 +2483,20 @@ class TestBackgroundRead:
 
     def test_close_stops_background_read(self, temp_notes_dir, write_notes, notebook):
         write_notes(temp_notes_dir, {f"n{i}.txt": "x" for i in range(50)})
-        nb = notebook(temp_notes_dir, cls=HookedNoteBook)
+        reader_threads = []
+
+        class RecordingNoteBook(HookedNoteBook):
+            def _read(self, abspath, title):
+                reader_threads.append(threading.current_thread().name)
+                return super()._read(abspath, title)
+
+        nb = notebook(temp_notes_dir, cls=RecordingNoteBook)
 
         nb.close()
         assert nb.warmer_finished.is_set()
-        for path in Path(temp_notes_dir).iterdir():
-            path.unlink()
-
-        assert nb.search("x") == []
+        # The watcher may read a note before close (macOS reports writes made
+        # just before the watch began); only the background read must not.
+        assert "tv3-read-notes" not in reader_threads
 
     def test_empty_search_does_not_wait_for_background_read(
         self, temp_notes_dir, write_notes, notebook
