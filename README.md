@@ -12,7 +12,7 @@ previewed (`Ctrl-P`) without leaving the list.
 The interface concept is taken from [Notational
 Velocity](http://notational.net/).
 
-This is an active fork of
+This is a fork of
 [terminal-velocity-notes/terminal_velocity](https://github.com/terminal-velocity-notes/terminal_velocity)
 and a port from Legacy Python to **Python 3**.
 
