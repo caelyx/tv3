@@ -157,16 +157,37 @@ def notebook():
         nb.close()
 
 
+class _InertObserver:
+    """A watchdog observer that never starts, so it reports no events."""
+
+    def schedule(self, *args, **kwargs):
+        pass
+
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+    def join(self, timeout=None):
+        pass
+
+
 @pytest.fixture
-def unwatched_notebook(notebook):
-    """Factory for notebooks whose filesystem observer is already stopped.
+def unwatched_notebook(notebook, monkeypatch):
+    """Factory for notebooks that never watch their directory.
 
     Tests drive `FileEventHandler` directly with watchdog event objects, so
     the outcome does not depend on the timing of real filesystem events.
+    The notebook is closed, so its background read has stopped too. A real
+    observer, even one stopped at once, is not enough: on macOS, FSEvents
+    can report writes made just before the watch began.
     """
 
     def make(path, **kwargs):
-        nb = notebook(path, **kwargs)
+        with monkeypatch.context() as m:
+            m.setattr(tv_notebook, "Observer", _InertObserver)
+            nb = notebook(path, **kwargs)
         nb.close()
         return nb
 
