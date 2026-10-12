@@ -21,6 +21,7 @@ def _write_notes(notes_dir, notes):
     """Write `notes` ({relpath: content}) with strictly increasing mtimes."""
     for i, (relpath, content) in enumerate(notes.items()):
         filepath = os.path.join(notes_dir, relpath)
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
         with open(filepath, "w") as f:
             f.write(content)
         os.utime(filepath, (BASE_MTIME + i, BASE_MTIME + i))

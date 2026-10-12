@@ -127,7 +127,8 @@ All settings must be in the `[DEFAULT]` section; any other section, or an unknow
 - `Enter`: Open selected note in editor (or create new note if typed a new title)
 - `Esc`, `Ctrl-D`, `Ctrl-U`: Clear selection/search or quit
 - `Ctrl-Q`, `Ctrl-X`, `Ctrl-C`: Quit application, also from the rename and delete prompts (while the editor runs, `Ctrl-C` goes to the editor only)
-- `Tab`, `Left`, `Right`: Accept autocomplete suggestion
+- `Tab`: Accept the autocomplete suggestion up to and including its next `/` after the typed text, so a note in a folder completes one folder at a time (`AutocompleteWidget.consume(segment=True)`); with no `/` left, the whole suggestion
+- `Left`, `Right`: Accept the whole autocomplete suggestion
 - `Up`/`Down`, `Page Up`/`Page Down`: Navigate note list
 - `Backspace`: Delete search text or clear autocomplete
 - Typing or `Backspace` while a navigated-to note's title replaces the search text edits that title

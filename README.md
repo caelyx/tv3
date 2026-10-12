@@ -65,12 +65,14 @@ ignoring case, come first, then fuzzy title matches, then notes that contain
 every word. The top note is selected only if its full title starts with what
 you typed, so typing `pasta` doesn't select `recipes/Pasta sauce`, and `Enter`
 creates `pasta`. Typing `Foo` selects an existing note `foo`, and `Enter` opens
-it rather than creating `Foo`.
+it rather than creating `Foo`. For a note in a folder, `Tab` completes one
+folder at a time: type `rec`, press `Tab` to get `recipes/`, then type the rest
+of the title.
 
 | Key                | Action                                                   |
 | ------------------ | -------------------------------------------------------- |
 | `Enter`            | open the selected note, or create a note titled as typed |
-| `Tab`              | complete the search text to the selected note's title    |
+| `Tab`              | complete the selected note's title, one folder at a time |
 | `Up`/`Down`        | move through the list of notes                           |
 | `Esc`              | clear the selection, then the search text, then quit     |
 | `Ctrl-R`           | rename the selected note                                 |

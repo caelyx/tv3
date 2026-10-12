@@ -140,6 +140,30 @@ class TestAutocompleteWidget:
         assert not widget.consume()
         assert widget.edit_text == "hello"
 
+    @pytest.mark.parametrize(
+        ("typed", "completion", "accepted"),
+        [
+            ("rec", "recipes/Pasta sauce", "recipes/"),
+            ("recipes", "recipes/Pasta sauce", "recipes/"),
+            ("recipes/", "recipes/Pasta sauce", "recipes/Pasta sauce"),
+            ("recipes/pa", "recipes/Pasta sauce", "recipes/Pasta sauce"),
+            ("REC", "recipes/Pasta sauce", "recipes/"),
+            ("a", "a/b/c", "a/"),
+            ("a/", "a/b/c", "a/b/"),
+            ("a/b/", "a/b/c", "a/b/c"),
+            ("strasse", "Straße/x", "Straße/"),
+            ("hel", "hello", "hello"),
+            ("sauce", "recipes/Pasta sauce", "recipes/Pasta sauce"),
+        ],
+    )
+    def test_consume_segment_stops_after_the_next_slash(self, typed, completion, accepted):
+        widget = urwid_ui.AutocompleteWidget(edit_text=typed)
+        widget.autocomplete_text = completion
+
+        assert widget.consume(segment=True)
+        assert widget.edit_text == accepted
+        assert widget.edit_pos == len(accepted)
+
 
 class TestSearchBoxMatchesSelection:
     """The search box always shows the current text and completion in full."""
@@ -534,6 +558,52 @@ class TestSelection:
         type_text(frame, "x")
         assert frame.search_box.edit_text == "foox"
 
+    def test_tab_completes_one_folder_at_a_time(self, make_frame, stub_editor, notes_dir):
+        frame = make_frame({"recipes/Pasta sauce.txt": "", "zed.txt": ""})
+        type_text(frame, "rec")
+        assert search_line(frame) == "recipes/Pasta sauce"
+
+        press(frame, "tab")
+        assert frame.search_box.edit_text == "recipes/"
+        assert search_line(frame) == "recipes/Pasta sauce"
+        assert highlighted(frame) == ["recipes/Pasta sauce"]
+
+        press(frame, "tab")
+        assert frame.search_box.edit_text == "recipes/Pasta sauce"
+
+        press(frame, "enter")
+        assert stub_editor.calls() == [[str(notes_dir / "recipes" / "Pasta sauce.txt")]]
+
+    def test_typing_after_a_folder_creates_a_note_in_it(self, make_frame, stub_editor, notes_dir):
+        frame = make_frame({"recipes/Pasta sauce.txt": ""})
+        type_text(frame, "rec")
+        press(frame, "tab")
+        type_text(frame, "pesto")
+        assert highlighted(frame) == []
+
+        press(frame, "enter")
+
+        assert stub_editor.calls() == [[str(notes_dir / "recipes" / "pesto.txt")]]
+
+    @pytest.mark.parametrize("key", ["left", "right"])
+    def test_left_and_right_complete_the_whole_title(self, make_frame, key):
+        frame = make_frame({"recipes/Pasta sauce.txt": ""})
+        type_text(frame, "rec")
+
+        press(frame, key)
+
+        assert frame.search_box.edit_text == "recipes/Pasta sauce"
+
+    def test_tab_on_a_navigated_to_note_completes_the_whole_title(self, make_frame):
+        frame = make_frame({"recipes/Pasta sauce.txt": "", "zed.txt": "sauce"})
+        type_text(frame, "sauce")
+        while highlighted(frame) != ["recipes/Pasta sauce"]:
+            press(frame, "down")
+
+        press(frame, "tab")
+
+        assert frame.search_box.edit_text == "recipes/Pasta sauce"
+
     def test_tab_is_ignored_once_the_title_is_typed(self, make_frame):
         frame = make_frame({"foo.txt": ""})
         type_text(frame, "foo")
@@ -879,6 +949,13 @@ class TestInputBatches:
 
         assert frame.search_box.edit_text == "foo barx"
         assert drawn[1].strip(" │┃") == "foo barx"
+
+    def test_tab_straight_after_typing_completes_the_folder(self, make_frame):
+        frame = make_frame({"recipes/Pasta sauce.txt": "", "zed.txt": ""})
+
+        feed(frame, ["r", "e", "c", "tab", "x"])
+
+        assert frame.search_box.edit_text == "recipes/x"
 
     def test_backspace_straight_after_typing_removes_only_the_completion(self, make_frame):
         frame = make_frame({"foo bar.txt": "", "zed.txt": ""})

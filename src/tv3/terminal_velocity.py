@@ -195,7 +195,7 @@ def main():
         "\n"
         "keys:\n"
         "  Enter           open the selected note, or create a note titled as typed\n"
-        "  Tab             complete the search text to the selected note's title\n"
+        "  Tab             complete the selected note's title, one folder at a time\n"
         "  Up/Down         move through the list of notes\n"
         "  Esc             clear the selection, then the search text, then quit\n"
         "  Ctrl-R          rename the selected note\n"

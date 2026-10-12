@@ -201,8 +201,12 @@ class AutocompleteWidget(urwid.Edit):
         canvas.cursor = (x, y)
         return canvas
 
-    def consume(self):
+    def consume(self, segment=False):
         """Turn the completion into typed text, with the cursor at the end.
+
+        With `segment`, a completion that extends the typed text is taken
+        only up to and including its next `/` after the typed text, so a
+        note in a folder completes one folder at a time.
 
         Returns:
             True if there was a completion that differed from the typed text.
@@ -210,6 +214,11 @@ class AutocompleteWidget(urwid.Edit):
         text = self.autocomplete_text
         if text is None or text == self.edit_text:
             return False
+        end = ranking.prefix_length(text, self.edit_text) if self.edit_text else None
+        if segment and end is not None:
+            slash = text.find("/", end)
+            if slash != -1:
+                text = text[: slash + 1]
         self.set_edit_text(text)
         self.set_edit_pos(len(text))
         self.autocomplete_text = None
@@ -665,7 +674,7 @@ class MainFrame(urwid.Frame):
             self.preview_shown = not self.preview_shown
             self._update_body()
         elif selected is not None and key in ["tab", "left", "right"]:
-            if self.search_box.consume():
+            if self.search_box.consume(segment=key == "tab"):
                 self.filter(self.search_box.edit_text, keep=selected)
             else:
                 return self._edit_search(size, key)
