@@ -26,6 +26,12 @@ EDITOR_TEMP_SUFFIXES = ("~", ".swp", ".swx")
 
 MAX_INDEXED_BYTES = 1024 * 1024
 
+# How many times a move's source and destination are both checked before the
+# file is taken to be gone from both. A file renamed between the two checks
+# of one pass is missed by that pass; each further pass needs another rename
+# to miss it again.
+MOVE_RECHECKS = 3
+
 # os.link errors meaning the filesystem cannot hard-link this file here.
 _LINK_UNSUPPORTED = {
     errno.EPERM,
@@ -926,6 +932,18 @@ class PlainTextNoteBook:
             return None
         return relpath, st.st_mtime
 
+    def _either_indexable(self, src: str, dest: str) -> bool:
+        """Whether `src` or `dest` is a note file, checking both up to MOVE_RECHECKS times.
+
+        For a file that may be moving between the two names: one pass of
+        checks can miss it if it moves from the second name to the first in
+        between them.
+        """
+        for _ in range(MOVE_RECHECKS):
+            if self._indexable(src) is not None or self._indexable(dest) is not None:
+                return True
+        return False
+
     def _add_locked(self, relpath: str, cached: _Stat | _Contents) -> PlainTextNote:
         title, extension = os.path.splitext(relpath)
         note = PlainTextNote(title, self, extension, cached)
@@ -1181,7 +1199,9 @@ class FileEventHandler(FileSystemEventHandler):
             # since: a source that exists again stays. The destination is
             # added before the source is dropped, and if neither is then
             # tracked although one is a note file, the file moved between
-            # the checks and both are checked again.
+            # the checks and both are checked again. Checking two names is not
+            # atomic, so a file still moving can be missed by every check: then
+            # the note is gone until the event for its next move adds it back.
             added = self._added(dest, event.is_directory)
             removed = self._removed(src, event.is_directory, only_if_missing=True)
             while (
@@ -1189,7 +1209,7 @@ class FileEventHandler(FileSystemEventHandler):
                 and not event.is_directory
                 and nb.note_at(src) is None
                 and nb.note_at(dest) is None
-                and (nb._indexable(src) is not None or nb._indexable(dest) is not None)
+                and nb._either_indexable(src, dest)
             ):
                 added = self._added(dest, False) or self._added(src, False) or added
             return removed or added

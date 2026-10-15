@@ -1327,6 +1327,37 @@ class TestFileEventHandler:
         assert changes.calls == 1
         assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
 
+    def test_move_whose_file_flips_between_the_recheck_keeps_the_note(
+        self, temp_notes_dir, write_notes, unwatched_notebook, caplog
+    ):
+        write_notes(temp_notes_dir, {"a.txt": "x"})
+        flips = []
+
+        class FlippingNoteBook(HookedNoteBook):
+            def _indexable(self, abspath, real_parent=None):
+                indexable = super()._indexable(abspath, real_parent)
+                if flips:
+                    flips.pop(0)()
+                return indexable
+
+        nb = unwatched_notebook(temp_notes_dir, cls=FlippingNoteBook)
+        changes = ChangeRecorder(nb)
+        nb.on_change = changes
+        a, b = os.path.join(nb.path, "a.txt"), os.path.join(nb.path, "b.txt")
+        # The file moves after each of the first two checks: after the
+        # destination is checked (so the source is dropped), and between the
+        # recheck of the source and of the destination, so one pass of checks
+        # finds the file under neither name.
+        flips.extend([lambda: os.rename(a, b), lambda: os.rename(b, a)])
+
+        with caplog.at_level(logging.DEBUG, logger="tv3"):
+            FileEventHandler(nb).on_moved(FileMovedEvent(a, b))
+
+        assert flips == []
+        assert titles(nb) == ["a"]
+        assert changes.calls == 1
+        assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
     def test_move_whose_destination_is_gone_before_its_read_keeps_the_source(
         self, temp_notes_dir, write_notes, unwatched_notebook, caplog
     ):
