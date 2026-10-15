@@ -1,37 +1,36 @@
 [build-system]
-requires = ["setuptools>=45", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["uv_build>=0.13.0,<0.14"]
+build-backend = "uv_build"
 
 [project]
 name = "tv3"
 version = "0.1.0"
 description = "A text-based note-taking application"
 authors = [{name = "Aramís Concepción Durán"}]
-license = {text = "GNU General Public License, Version 3"}
+license = "GPL-3.0-only"
+license-files = ["LICENSE.txt"]
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "urwid==2.1.2",
-    "watchdog>=2.0.0,<5.0.0",
-]
-
-[project.optional-dependencies]
-test = [
-    "pytest>=7.0.0",
-    "pytest-cov>=4.0.0",
-    "pytest-mock>=3.10.0",
-]
-dev = [
-    "ruff>=0.4.0",
-    "mypy>=1.10.0",
-    "pre-commit>=3.5.0",
+    "urwid>=4.2.5,<5",
+    "watchdog>=6,<7",
+    "pfzy>=0.3.4,<0.4",
+    "wcwidth>=0.4,<1",
 ]
 
 [project.scripts]
-tv3 = "terminal_velocity:main"
+tv3 = "tv3.terminal_velocity:main"
 
 [project.urls]
 Homepage = "https://github.com/caelyx/tv3"
+
+[dependency-groups]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "ruff==0.17.*",
+    "mypy>=1.10.0",
+]
 
 [tool.ruff]
 line-length = 100
@@ -59,10 +58,11 @@ ignore = [
 "tests/*" = ["S101"]  # assert statements OK in tests
 
 [tool.ruff.lint.isort]
-known-first-party = ["terminal_velocity", "tv_notebook", "urwid_ui"]
+known-first-party = ["tv3"]
 
 [tool.mypy]
 python_version = "3.11"
+files = ["src"]
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false  # Start lenient, increase strictness later
@@ -78,16 +78,13 @@ addopts = [
     "--strict-markers",
     "--tb=short",
 ]
+filterwarnings = ["error::DeprecationWarning", "error::PendingDeprecationWarning"]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-    "integration: marks tests as integration tests",
-    "unit: marks tests as unit tests",
-    "ui: marks tests as UI tests",
-    "threading: marks tests that involve threading",
 ]
 
 [tool.coverage.run]
-source = ["src"]
+source = ["src/tv3"]
 omit = [
     "*/tests/*",
     "*/test_*.py",

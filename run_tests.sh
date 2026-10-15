@@ -8,37 +8,31 @@ echo "Terminal Velocity 3 - Test Runner"
 echo "===================================="
 echo ""
 
-# Check if pytest is installed
-if ! command -v pytest &> /dev/null; then
-    echo "pytest not found. Installing test dependencies..."
-    pip install -e ".[test]"
-fi
-
 # Parse arguments
 if [ "$1" == "coverage" ]; then
     echo "Running tests with coverage..."
-    pytest --cov=src --cov-report=html --cov-report=term-missing
+    uv run pytest --cov=src/tv3 --cov-report=html --cov-report=term-missing
     echo ""
     echo "Coverage report generated in htmlcov/index.html"
 elif [ "$1" == "fast" ]; then
-    echo "Running fast tests only (skipping slow tests)..."
-    pytest -m "not slow"
+    echo "Skipping tests marked slow (real filesystem-watcher tests)..."
+    uv run pytest -m "not slow"
 elif [ "$1" == "unit" ]; then
     echo "Running unit tests only..."
-    pytest tests/test_tv_notebook.py tests/test_terminal_velocity.py tests/test_urwid_ui.py
+    uv run pytest tests/test_tv_notebook.py tests/test_terminal_velocity.py tests/test_urwid_ui.py tests/test_ranking.py
 elif [ "$1" == "integration" ]; then
     echo "Running integration tests only..."
-    pytest tests/test_integration.py
+    uv run pytest tests/test_integration.py
 elif [ "$1" == "verbose" ]; then
     echo "Running tests with verbose output..."
-    pytest -vv
+    uv run pytest -vv
 elif [ "$1" == "help" ] || [ "$1" == "-h" ] || [ "$1" == "--help" ]; then
     echo "Usage: ./run_tests.sh [option]"
     echo ""
     echo "Options:"
     echo "  (none)        Run all tests"
     echo "  coverage      Run with coverage report"
-    echo "  fast          Run fast tests only"
+    echo "  fast          Skip tests marked slow (real filesystem-watcher tests)"
     echo "  unit          Run unit tests only"
     echo "  integration   Run integration tests only"
     echo "  verbose       Run with verbose output"
@@ -47,7 +41,7 @@ elif [ "$1" == "help" ] || [ "$1" == "-h" ] || [ "$1" == "--help" ]; then
     exit 0
 else
     echo "Running all tests..."
-    pytest
+    uv run pytest
 fi
 
 echo ""
